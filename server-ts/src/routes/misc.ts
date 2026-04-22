@@ -2,7 +2,8 @@
  * + 501 stubs for /api/cycle/start and tavern endpoints (ported in 9e/9f). */
 
 import { existsSync } from "node:fs";
-import { readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 import {
@@ -14,8 +15,6 @@ import {
 } from "../config.ts";
 import { upsertState } from "../models.ts";
 import { manager } from "../ws-manager.ts";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 
 interface Potion {
   cost: number;
@@ -68,7 +67,9 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // /api/cycle/start — stub until 9f wires the real TS cycle runner.
+  // /api/cycle/start — spawns the quest-cycle.ts runner as a detached
+  // child process. The watcher picks up events.jsonl writes as they land
+  // and broadcasts them to the dashboard.
   app.post("/api/cycle/start", async (_request, reply) => {
     if (!QUEST_CYCLE_ENABLED) {
       return reply.code(503).send({
@@ -76,10 +77,45 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
         message: "Quest cycle is disabled. Set QUEST_CYCLE_ENABLED=1 to enable.",
       });
     }
-    return reply.code(501).send({
-      status: "not_implemented",
-      message: "Cycle runner lands in phase-9f of the TS port.",
-    });
+    if (existsSync(CYCLE_LOCK_FILE)) {
+      try {
+        const ts = Number.parseInt((await readFile(CYCLE_LOCK_FILE, "utf8")).trim(), 10);
+        const age = Math.floor(Date.now() / 1000) - ts;
+        if (age < GAME_BALANCE.cycle_lock_timeout) {
+          return { status: "already_running" };
+        }
+      } catch {
+        /* stale lock — treat as free */
+      }
+    }
+
+    await writeFile(CYCLE_LOCK_FILE, String(Math.floor(Date.now() / 1000)));
+    const { CYCLE_LOG_FILE } = await import("../config.ts");
+    await mkdir(dirname(CYCLE_LOG_FILE), { recursive: true });
+
+    const { spawn } = await import("node:child_process");
+    const script = join(process.cwd(), "server-ts", "src", "quest-cycle.ts");
+    const fallback = join(import.meta.dir ?? "", "..", "quest-cycle.ts");
+    const runner = existsSync(script) ? script : fallback;
+    try {
+      const log = await import("node:fs").then((m) =>
+        m.openSync(CYCLE_LOG_FILE, "a"),
+      );
+      const child = spawn("bun", [runner, "manual"], {
+        detached: true,
+        stdio: ["ignore", log, log],
+        env: { ...process.env, QUEST_CYCLE_TRIGGER: "manual" },
+      });
+      child.unref();
+    } catch (err) {
+      try {
+        await unlink(CYCLE_LOCK_FILE);
+      } catch {
+        /* ignore */
+      }
+      return reply.code(500).send({ status: "error", message: (err as Error).message });
+    }
+    return { status: "started", mode: "native-ts" };
   });
 
   // /api/potion/use — spend gold, heal HP or restore MP
