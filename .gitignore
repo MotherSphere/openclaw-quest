@@ -39,9 +39,12 @@ docs/superpowers/
 *.sln
 *.sw?
 
-# AI-generated assets (persist locally, don't commit to git)
+# AI-generated assets (persist locally, don't commit to git).
+# NOTE: `public/npc/*.png` is deliberately NOT ignored — the 5 canonical NPC
+# portraits are committed into the repo along with a spritecook-assets.json
+# manifest so a fresh clone of OpenClaw Quest ships with a usable tavern.
+# Background tiles, generic sprites and icons stay local-only.
 public/bg/*.png
-public/npc/*.png
 public/sprites/*.png
 public/icons/*.png
 public/bg/backup-v1/
