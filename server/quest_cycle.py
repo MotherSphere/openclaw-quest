@@ -533,7 +533,48 @@ class QuestCycleRunner:
         }
         self._write_json(MAP_FILE, self.map_data)
 
-        logger.info("seeded %d starter workflows into the atlas", len(workflows))
+        # Also seed sites.json — the frontend WORLD MAP renders sites, not
+        # workflows directly. We map category -> sprite slug (the sprites at
+        # /sprites/continent-*.png are themselves optional AI-generated
+        # assets; if missing, the site still renders with a fallback). The
+        # 6 slot ids (starter-town, site-1..5) match the fixed grid the
+        # frontend lays out.
+        category_sprite = {
+            "coding": "software-engineering",
+            "research": "research-knowledge",
+            "automation": "automation-tools",
+            "creative": "creative-arts",
+        }
+        slot_ids = ["starter-town", "site-1", "site-2", "site-3", "site-4", "site-5"]
+        sites: list[dict[str, Any]] = []
+        for idx, wf in enumerate(workflows):
+            slot = slot_ids[idx] if idx < len(slot_ids) else f"site-{idx}"
+            sites.append({
+                "id": slot,
+                "name": wf["name"],
+                "is_default": slot == "starter-town",
+                "defined": True,
+                "domain": wf["name"].lower(),
+                "workflow_id": wf["id"],
+                "sprite": category_sprite.get(wf["category"]) or "software-engineering",
+            })
+        # Fill remaining slots with undefined placeholders so the map UI shows
+        # fog-of-war spots for future domains to discover.
+        for idx in range(len(workflows), len(slot_ids)):
+            slot = slot_ids[idx]
+            sites.append({
+                "id": slot,
+                "name": None,
+                "is_default": slot == "starter-town",
+                "defined": False,
+                "domain": None,
+                "workflow_id": None,
+                "sprite": None,
+            })
+        from config import SITES_FILE
+        self._write_json(SITES_FILE, sites)
+
+        logger.info("seeded %d starter workflows into the atlas (+ %d sites)", len(workflows), len(sites))
         for wf in workflows:
             self._write_event("region_unlock", {
                 "name": wf["name"],
