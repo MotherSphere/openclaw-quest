@@ -204,6 +204,7 @@ export default function CenterTabs() {
             onCloseChat={() => { setChatNpc(null); setActiveNpc(null) }}
             chatHistoryRef={chatHistoryRef}
             npcPrefill={npcPrefill}
+            onPrefillConsumed={() => setNpcPrefill(null)}
           />
         )}
         {activeTab === 'map' && (

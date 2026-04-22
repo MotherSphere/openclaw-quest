@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from config import (
+    COMPLETIONS_DIR,
     EVENTS_FILE,
     FEEDBACK_DIGEST_FILE,
     GAME_BALANCE,
@@ -430,6 +431,13 @@ class QuestCycleRunner:
             # keep the structural outcomes after it so nothing is lost.
             self.outcomes = [llm_summary] + self.outcomes
 
+        # Drop a "research note" into the Bag when a quest completes —
+        # Hermes-style: any .md file in COMPLETIONS_DIR is auto-exposed by
+        # /api/bag/items as a research_note item. Gives the INVENTORY panel
+        # real content at each successful cycle.
+        if self.completed_quest:
+            self._write_completion_note(llm_summary)
+
         self._write_event(
             "cycle_phase",
             {
@@ -641,6 +649,47 @@ class QuestCycleRunner:
         self._write_json(SITES_FILE, sites)
         logger.info("backfilled sites.json with %d slots (%d defined) from existing workflows",
                     len(sites), sum(1 for s in sites if s["defined"]))
+
+    def _write_completion_note(self, llm_summary: str | None) -> None:
+        """Write a research-note markdown for the just-completed quest.
+
+        /api/bag/items scans COMPLETIONS_DIR for .md files and exposes each
+        as a research_note bag item (name = file stem, description = first
+        200 chars). So a single markdown write here makes a new item drop
+        into the INVENTORY panel with no other plumbing."""
+        quest = self.completed_quest or {}
+        title = quest.get("title") or "Cycle report"
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or f"cycle-{int(time.time())}"
+        # Filename is the slug alone — if a later cycle completes the same
+        # quest title, overwriting is the right behaviour (same content, or
+        # fresher content replacing older). The filename stem is what
+        # /api/bag/items displays as the item name, so we want it clean.
+        fname = f"{slug}.md"
+        body_parts = [
+            f"# {title}",
+            "",
+            f"- rank: **{quest.get('rank', 'C')}**",
+            f"- workflow: {quest.get('workflow_id') or 'unknown'}",
+            f"- xp earned: {quest.get('reward_xp', 0)}",
+            f"- gold earned: {quest.get('reward_gold', 0)}",
+            f"- completed: {quest.get('completed_at', self._now_iso())}",
+            "",
+            "## Brief",
+            quest.get("description") or "(no description)",
+            "",
+        ]
+        if self.plan and self.plan.reason:
+            body_parts += ["## Plan reasoning", self.plan.reason, ""]
+        if self.skills_gained:
+            body_parts += ["## Skills practiced", ", ".join(self.skills_gained), ""]
+        if llm_summary:
+            body_parts += ["## Reflection", llm_summary, ""]
+        body = "\n".join(body_parts)
+        try:
+            COMPLETIONS_DIR.mkdir(parents=True, exist_ok=True)
+            (COMPLETIONS_DIR / fname).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("failed to write completion note %s: %s", fname, exc)
 
     def _propose_quest(self, workflow: dict, target_skill: str | None) -> dict | None:
         """Ask the LLM to draft one concrete quest targeting the chosen

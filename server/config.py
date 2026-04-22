@@ -24,24 +24,16 @@ QUEST_SKILL_DIR = OPENCLAW_HOME / "skills" / "quest"
 SKILLS_DIR = OPENCLAW_HOME / "skills"
 DB_PATH = QUEST_DIR / "quest.db"
 
-# Agent runtime integration.
-#
-# Phase 1a carries over the Python-oriented spawn model inherited from
-# Hermes Quest. OpenClaw is a Node.js runtime installed at /usr/bin/openclaw
-# (AUR package), so the sys.path / hermes_cli.main plumbing below is a
-# placeholder: the `.exists()` guards will fail gracefully, and cycle/hub
-# features will report "runtime not found" until Phase 2 rewires them to
-# OpenClaw's actual invocation model.
+# Path to the OpenClaw CLI binary — shelled out to by quest_cycle, npc_chat,
+# and the hub endpoints via `openclaw agent` / `openclaw skills`.
 AGENT_RUNTIME_BIN = Path(
     os.environ.get("QUEST_OPENCLAW_BIN", shutil.which("openclaw") or "/usr/bin/openclaw")
 ).expanduser()
+# Path to OpenClaw's data root — still referenced by the legacy skill_classify
+# code path (inert in practice, see note in skill_classify.py).
 AGENT_RUNTIME_HOME = Path(
     os.environ.get("QUEST_OPENCLAW_HOME", str(OPENCLAW_HOME))
 ).expanduser()
-# Kept for compatibility with the legacy spawn path; OpenClaw has no Python
-# site-packages, so this resolves to an empty glob and the loop is a no-op.
-AGENT_RUNTIME_SITE_PACKAGES_GLOB = os.environ.get("QUEST_OPENCLAW_SITE_PACKAGES_GLOB", "")
-TWITTER_CLI = os.environ.get("QUEST_TWITTER_CLI") or shutil.which("twitter") or ""
 QUEST_CYCLE_PROMPT = os.environ.get("QUEST_CYCLE_PROMPT", "Run quest evolution cycle")
 QUEST_CYCLE_ENABLED = os.environ.get("QUEST_CYCLE_ENABLED", "0") == "1"
 

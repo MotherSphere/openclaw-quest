@@ -3,7 +3,7 @@ import BackButton from '../components/BackButton'
 import RpgDialogInline from './RpgDialogInline'
 
 /** Tavern BOTTOM panel — 3 states: NPC gallery / NPC bio card / NPC chat */
-export default function TavernNpcPanel({ activeNpc, onNpcSelect, chatNpc, onNpcChat, onCloseBio, onCloseChat, chatHistoryRef, npcPrefill }: {
+export default function TavernNpcPanel({ activeNpc, onNpcSelect, chatNpc, onNpcChat, onCloseBio, onCloseChat, chatHistoryRef, npcPrefill, onPrefillConsumed }: {
   activeNpc: string | null
   onNpcSelect: (id: string) => void
   chatNpc: string | null
@@ -12,6 +12,7 @@ export default function TavernNpcPanel({ activeNpc, onNpcSelect, chatNpc, onNpcC
   onCloseChat: () => void
   chatHistoryRef: React.MutableRefObject<Record<string, Array<{ role: 'npc' | 'user'; text: string }>>>
   npcPrefill?: string | null
+  onPrefillConsumed?: () => void
 }) {
   const selectedNpcData = activeNpc ? NPCS.find(n => n.id === activeNpc) : null
   const chatNpcData = chatNpc ? NPCS.find(n => n.id === chatNpc) : null
@@ -21,7 +22,7 @@ export default function TavernNpcPanel({ activeNpc, onNpcSelect, chatNpc, onNpcC
   if (chatNpc && chatNpcData) {
     return (
       <div style={{ width: '100%', height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <RpgDialogInline npc={chatNpcData} onClose={onCloseChat} chatHistoryRef={chatHistoryRef} prefillMessage={npcPrefill} />
+        <RpgDialogInline npc={chatNpcData} onClose={onCloseChat} chatHistoryRef={chatHistoryRef} prefillMessage={npcPrefill} onPrefillConsumed={onPrefillConsumed} />
       </div>
     )
   }
