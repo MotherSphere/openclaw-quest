@@ -1,12 +1,12 @@
-"""NPC Chat — LLM via Codex (ChatGPT backend, streaming required)."""
+"""NPC Chat — single-turn replies via the OpenClaw agent runtime."""
+import asyncio
 import json
-import sys
 import logging
 from pathlib import Path
-from openai import AsyncOpenAI
 import httpx
 
-from config import AGENT_RUNTIME_HOME, QUESTS_V2_FILE, EVENTS_FILE
+from config import QUESTS_V2_FILE, EVENTS_FILE
+from openclaw_agent import call_agent
 
 logger = logging.getLogger(__name__)
 
@@ -17,31 +17,14 @@ _INJECTION_PATTERNS = _re_sanitize.compile(
     _re_sanitize.IGNORECASE,
 )
 
+NPC_LLM_TIMEOUT = 60
+
 def _sanitize_value(value: str, max_len: int = 200) -> str:
     """Sanitize a dynamic value to prevent prompt injection."""
     value = str(value) if value is not None else ""
     value = value[:max_len]
     value = _INJECTION_PATTERNS.sub("[FILTERED]", value)
     return value
-
-# Phase 1a: NPC chat still resolves Codex credentials via the legacy
-# hermes_cli.auth module. Phase 2 will replace this with an OpenClaw-native
-# credential source.
-sys.path.insert(0, str(AGENT_RUNTIME_HOME))
-
-def _get_codex_client():
-    try:
-        from hermes_cli.auth import resolve_codex_runtime_credentials  # noqa: F401 — legacy path, Phase 2 will replace
-        creds = resolve_codex_runtime_credentials()
-        base_url = creds.get("base_url", "").rstrip("/")
-        api_key = creds.get("api_key", "")
-        if not base_url or not api_key:
-            return None
-        http_client = httpx.AsyncClient(proxy="http://127.0.0.1:7890")
-        return AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=http_client), http_client
-    except Exception as e:
-        logger.error(f"Failed to get codex client: {e}")
-        return None
 
 MODEL = "gpt-5.1-codex-mini"
 
@@ -253,50 +236,42 @@ async def chat_with_npc(npc_id, message, context, game_state=None, history=None)
         if rumors_info:
             instructions += "\n\nLatest rumors:\n" + rumors_info
 
-    # Store history for context
+    # Build one self-contained prompt for `openclaw agent`: NPC role
+    # instructions (already rendered with game context above) + recent
+    # conversation + current user message. `openclaw agent` takes a single
+    # -m flag so we concatenate instead of splitting into system/user turns.
     msg_history = history or []
+    history_block = ""
+    if msg_history:
+        lines = []
+        for m in msg_history[-8:]:
+            role = "User" if m.get("role") == "user" else "You"
+            content = _sanitize_value(m.get("content", ""), max_len=240)
+            lines.append(f"{role}: {content}")
+        history_block = "\n".join(lines)
 
+    final_prompt = instructions
+    if history_block:
+        final_prompt += f"\n\nRecent conversation:\n{history_block}"
+    final_prompt += (
+        f"\n\nUser message: {_sanitize_value(message, max_len=500)}\n\n"
+        "Respond in-character as the NPC described above. Keep it natural and "
+        "brief (1-4 short sentences). No stage directions, no bullet points."
+    )
 
-    result = _get_codex_client()
-    if not result:
-        return {"reply": "*stares silently* (LLM not configured)", "actions": [], "npc_mood": "serious"}
+    # Run the agent call on a worker thread so we don't block the FastAPI
+    # event loop for the 5-30s the LLM takes.
+    reply = await asyncio.to_thread(call_agent, final_prompt, timeout=NPC_LLM_TIMEOUT)
+    if not reply:
+        logger.warning("NPC %s: agent call returned no reply", npc_id)
+        return {
+            "reply": "*the tavern lull fills the space* ...try again in a moment.",
+            "actions": [],
+            "npc_mood": "serious",
+        }
 
-    client, http_client = result
-    try:
-        # Codex requires stream=True and store=False
-        # Build input with history
-        input_msgs = []
-        if msg_history:
-            input_msgs.extend(msg_history[-8:])
-        input_msgs.append({"role": "user", "content": message})
-
-        stream = await client.responses.create(
-            model=MODEL,
-            instructions=instructions,
-            input=input_msgs,
-            store=False,
-            stream=True,
-        )
-
-        # Collect streamed text
-        reply_parts = []
-        async for event in stream:
-            if hasattr(event, 'type'):
-                if event.type == 'response.output_text.delta':
-                    reply_parts.append(event.delta)
-                elif event.type == 'response.completed':
-                    break
-
-        await http_client.aclose()
-        reply = "".join(reply_parts).strip() or "..."
-
-        mood = "friendly"
-        lower = reply.lower()
-        if any(w in lower for w in ["!", "haha", "excellent", "wonderful"]): mood = "excited"
-        elif any(w in lower for w in ["hmm", "careful", "beware", "danger"]): mood = "serious"
-        return {"reply": reply, "actions": [], "npc_mood": mood}
-    except Exception as e:
-        logger.error(f"NPC chat error: {e}")
-        try: await http_client.aclose()
-        except: pass
-        return {"reply": "*adjusts their gaze* ...Could you repeat that?", "actions": [], "npc_mood": "friendly"}
+    mood = "friendly"
+    lower = reply.lower()
+    if any(w in lower for w in ["!", "haha", "excellent", "wonderful"]): mood = "excited"
+    elif any(w in lower for w in ["hmm", "careful", "beware", "danger"]): mood = "serious"
+    return {"reply": reply, "actions": [], "npc_mood": mood}

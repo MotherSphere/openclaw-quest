@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -25,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from config import (
-    AGENT_RUNTIME_BIN,
     EVENTS_FILE,
     FEEDBACK_DIGEST_FILE,
     GAME_BALANCE,
@@ -34,66 +32,12 @@ from config import (
     STATE_FILE,
     CYCLE_LOCK_FILE,
 )
+from openclaw_agent import call_agent as _call_openclaw_agent
 
 
 logger = logging.getLogger(__name__)
 
 QUEST_DIR = EVENTS_FILE.parent
-
-LLM_AGENT_ID = os.environ.get("QUEST_CYCLE_AGENT_ID", "main")
-LLM_TIMEOUT_S = int(os.environ.get("QUEST_CYCLE_LLM_TIMEOUT", "90"))
-LLM_THINKING = os.environ.get("QUEST_CYCLE_THINKING", "minimal")
-
-
-def _call_openclaw_agent(prompt: str) -> str | None:
-    """Run a single `openclaw agent` turn and return the visible text.
-
-    Returns None on any failure (binary missing, timeout, non-zero exit, JSON
-    parse error). Callers MUST have a deterministic fallback.
-    """
-    if not AGENT_RUNTIME_BIN.exists():
-        return None
-    cmd = [
-        str(AGENT_RUNTIME_BIN),
-        "agent",
-        "--agent", LLM_AGENT_ID,
-        "--thinking", LLM_THINKING,
-        "--json",
-        "-m", prompt,
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=LLM_TIMEOUT_S,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("openclaw agent call failed: %s", exc)
-        return None
-    if result.returncode != 0:
-        logger.warning("openclaw agent returned %d: %s", result.returncode, result.stderr[:200])
-        return None
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        logger.warning("openclaw agent produced non-JSON output")
-        return None
-    # Shape: {"data": {..., "finalAssistantVisibleText": "..."}} — be defensive,
-    # the exact nesting has shifted across openclaw versions.
-    def _dig(obj: Any, key: str) -> str | None:
-        if isinstance(obj, dict):
-            if key in obj and isinstance(obj[key], str):
-                return obj[key]
-            for v in obj.values():
-                found = _dig(v, key)
-                if found:
-                    return found
-        return None
-    text = _dig(payload, "finalAssistantVisibleText") or _dig(payload, "finalAssistantRawText")
-    if not text:
-        return None
-    return text.strip() or None
 
 
 @dataclass
