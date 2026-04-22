@@ -3,12 +3,20 @@
 Runs REFLECT -> PLAN -> EXECUTE -> REPORT as a detached process that appends
 Quest events to ~/.openclaw/quest/events.jsonl. The FastAPI watcher picks up the
 new events and forwards progress to the dashboard.
+
+REFLECT and REPORT call the OpenClaw agent (`openclaw agent`) for a real LLM
+summary; PLAN and EXECUTE stay deterministic (target choice is driven by the
+feedback-digest heuristics, execution is structural). If the LLM call fails or
+times out, the runner falls back to a templated summary so the cycle always
+completes.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -17,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from config import (
+    AGENT_RUNTIME_BIN,
     EVENTS_FILE,
     FEEDBACK_DIGEST_FILE,
     GAME_BALANCE,
@@ -27,7 +36,64 @@ from config import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 QUEST_DIR = EVENTS_FILE.parent
+
+LLM_AGENT_ID = os.environ.get("QUEST_CYCLE_AGENT_ID", "main")
+LLM_TIMEOUT_S = int(os.environ.get("QUEST_CYCLE_LLM_TIMEOUT", "90"))
+LLM_THINKING = os.environ.get("QUEST_CYCLE_THINKING", "minimal")
+
+
+def _call_openclaw_agent(prompt: str) -> str | None:
+    """Run a single `openclaw agent` turn and return the visible text.
+
+    Returns None on any failure (binary missing, timeout, non-zero exit, JSON
+    parse error). Callers MUST have a deterministic fallback.
+    """
+    if not AGENT_RUNTIME_BIN.exists():
+        return None
+    cmd = [
+        str(AGENT_RUNTIME_BIN),
+        "agent",
+        "--agent", LLM_AGENT_ID,
+        "--thinking", LLM_THINKING,
+        "--json",
+        "-m", prompt,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=LLM_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("openclaw agent call failed: %s", exc)
+        return None
+    if result.returncode != 0:
+        logger.warning("openclaw agent returned %d: %s", result.returncode, result.stderr[:200])
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logger.warning("openclaw agent produced non-JSON output")
+        return None
+    # Shape: {"data": {..., "finalAssistantVisibleText": "..."}} — be defensive,
+    # the exact nesting has shifted across openclaw versions.
+    def _dig(obj: Any, key: str) -> str | None:
+        if isinstance(obj, dict):
+            if key in obj and isinstance(obj[key], str):
+                return obj[key]
+            for v in obj.values():
+                found = _dig(v, key)
+                if found:
+                    return found
+        return None
+    text = _dig(payload, "finalAssistantVisibleText") or _dig(payload, "finalAssistantRawText")
+    if not text:
+        return None
+    return text.strip() or None
 
 
 @dataclass
@@ -62,6 +128,7 @@ class QuestCycleRunner:
         self.completed_quest: dict[str, Any] | None = None
         self.skills_gained: list[str] = []
         self.outcomes: list[str] = []
+        self._reflect_summary_text: str | None = None
 
     def run(self) -> int:
         try:
@@ -188,7 +255,7 @@ class QuestCycleRunner:
         if not reasons:
             reasons.append("focus on the weakest currently available workflow")
 
-        reflect_summary = "; ".join(
+        deterministic_summary = "; ".join(
             part for part in [
                 f"Morale at {morale}",
                 f"avoiding skills {', '.join(sorted(set(avoided_skills))[:4])}" if avoided_skills else "no blocked skills",
@@ -196,6 +263,20 @@ class QuestCycleRunner:
                 f"workflow target {workflow_name or 'unknown'}",
             ] if part
         )
+
+        reflect_summary = self._llm_reflect(
+            morale=morale,
+            workflow_name=workflow_name,
+            target_skill=target_skill,
+            avoided_skills=sorted(set(avoided_skills)),
+            prioritized_skills=prioritized_skills,
+            recent_feedback=recent_feedback,
+            corrections=corrections,
+        ) or deterministic_summary
+        llm_used = reflect_summary != deterministic_summary
+
+        self._reflect_summary_text = reflect_summary  # stored for REPORT context
+
         self._write_event(
             "reflect",
             {
@@ -203,6 +284,7 @@ class QuestCycleRunner:
                 "weaknesses": [workflow_name] if workflow_name else [],
                 "summary": reflect_summary,
                 "feedback_items": feedback_items,
+                "llm": llm_used,
             },
         )
         self._write_event(
@@ -351,6 +433,13 @@ class QuestCycleRunner:
             self.outcomes.append(f"Completed quest {quest_title}")
         if not self.outcomes:
             self.outcomes.append("Maintained steady progress")
+
+        llm_summary = self._llm_report(status=status, quest_title=quest_title)
+        if llm_summary:
+            # Prepend the LLM narrative so it shows first in the report panel;
+            # keep the structural outcomes after it so nothing is lost.
+            self.outcomes = [llm_summary] + self.outcomes
+
         self._write_event(
             "cycle_phase",
             {
@@ -359,6 +448,7 @@ class QuestCycleRunner:
                 "skills_gained": self.skills_gained,
                 "quest_completed": quest_title,
                 "status": status,
+                "llm": llm_summary is not None,
             },
         )
         self._write_event(
@@ -370,6 +460,69 @@ class QuestCycleRunner:
                 "quest_completed": quest_title,
             },
         )
+
+    def _llm_reflect(
+        self,
+        *,
+        morale: int,
+        workflow_name: str | None,
+        target_skill: str | None,
+        avoided_skills: list[str],
+        prioritized_skills: list[str],
+        recent_feedback: list[dict[str, Any]],
+        corrections: list[dict[str, Any]],
+    ) -> str | None:
+        fb_lines = []
+        for item in recent_feedback[-5:]:
+            if not isinstance(item, dict):
+                continue
+            sentiment = item.get("sentiment") or item.get("type") or "?"
+            subject = item.get("skill") or item.get("workflow") or item.get("target") or "?"
+            reason = (item.get("reason") or "").strip()
+            fb_lines.append(f"- {sentiment} on {subject}" + (f": {reason}" if reason else ""))
+        corr_lines = []
+        for item in corrections[-3:]:
+            if isinstance(item, dict):
+                text = (item.get("text") or item.get("reason") or item.get("detail") or "").strip()
+                if text:
+                    corr_lines.append(f"- {text}")
+        fb_block = "\n".join(fb_lines) if fb_lines else "(none)"
+        corr_block = "\n".join(corr_lines) if corr_lines else "(none)"
+
+        prompt = (
+            "You are the reflection voice of an RPG-style self-evolving learning agent. "
+            "Based on the state below, write ONE or TWO short sentences (max ~280 characters total) "
+            "summarising the agent's current situation and the training direction it should take next. "
+            "Be concrete, first-person is fine. No headings, no bullet points, no preamble.\n\n"
+            f"Morale (MP): {morale}/100\n"
+            f"Candidate target workflow: {workflow_name or 'unknown'}\n"
+            f"Candidate target skill: {target_skill or 'none'}\n"
+            f"Skills flagged by user as avoid: {', '.join(avoided_skills) or 'none'}\n"
+            f"Skills preferred by user: {', '.join(prioritized_skills[:8]) or 'none'}\n"
+            f"Recent feedback items:\n{fb_block}\n"
+            f"User corrections:\n{corr_block}\n"
+        )
+        return _call_openclaw_agent(prompt)
+
+    def _llm_report(self, *, status: str, quest_title: str | None) -> str | None:
+        duration = round(time.time() - self.started_at, 2)
+        skills = ", ".join(self.skills_gained) if self.skills_gained else "none"
+        struct = "\n".join(f"- {o}" for o in self.outcomes) or "- (no structural outcomes)"
+        reflect = self._reflect_summary_text or "(reflection unavailable)"
+
+        prompt = (
+            "You are the narrator of an RPG-style learning cycle. A cycle just finished. "
+            "Write ONE short paragraph (max ~300 characters) summarising what happened — "
+            "tone: lucid, grounded, light fantasy flavour ok but no purple prose. "
+            "No headings, no bullet points.\n\n"
+            f"Cycle status: {status}\n"
+            f"Duration: {duration}s\n"
+            f"Reflection at the start: {reflect}\n"
+            f"Skills practiced: {skills}\n"
+            f"Quest completed: {quest_title or 'none'}\n"
+            f"Structural outcomes:\n{struct}\n"
+        )
+        return _call_openclaw_agent(prompt)
 
     def _write_event(self, event_type: str, data: dict[str, Any]) -> None:
         event = {
