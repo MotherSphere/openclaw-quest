@@ -9,6 +9,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': backendUrl,
+      '/ws': { target: backendUrl, ws: true, changeOrigin: true },
       '/bg': backendUrl,
       '/skills': backendUrl,
       '/items': backendUrl,
