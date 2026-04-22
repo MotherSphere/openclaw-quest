@@ -25,6 +25,7 @@ import { registerReflectionRoutes } from "./routes/reflection.ts";
 import { registerHubRoutes } from "./routes/hub.ts";
 import { registerRumorRoutes } from "./routes/rumors.ts";
 import { registerMiscRoutes } from "./routes/misc.ts";
+import { registerTavernRoutes } from "./routes/tavern.ts";
 
 const app = Fastify({ logger: { level: "info" } });
 
@@ -67,6 +68,7 @@ await registerQuestRoutes(app);
 await registerReflectionRoutes(app);
 await registerHubRoutes(app);
 await registerRumorRoutes(app);
+await registerTavernRoutes(app);
 await registerMiscRoutes(app);
 
 // WebSocket — /ws serves the live event stream. Initial snapshot on
