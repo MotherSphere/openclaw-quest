@@ -3,6 +3,12 @@ import { useEffect, useRef } from 'react'
 /**
  * Animated pixel art background — uses direct DOM manipulation to avoid
  * React re-render flicker. Preloads all frames, then swaps src directly.
+ *
+ * The initial src is the first animation frame itself (not a separate
+ * fallback file). The animation frames are versioned in the repo, whereas
+ * the decorative `/bg/*-bg.png` fallbacks are gitignored — so using the
+ * frame avoids a guaranteed 404 on the first render that used to leave the
+ * tavern background black.
  */
 export default function AnimatedBg({
   prefix,
@@ -18,6 +24,7 @@ export default function AnimatedBg({
   style?: React.CSSProperties
 }) {
   const imgRef = useRef<HTMLImageElement>(null)
+  const firstFrame = `/bg/anim/${prefix}-f1.png`
 
   useEffect(() => {
     const srcs: string[] = []
@@ -57,12 +64,17 @@ export default function AnimatedBg({
   return (
     <img
       ref={imgRef}
-      src={fallback}
+      src={firstFrame}
       alt=""
       draggable={false}
       onError={(e) => {
-        // Hide broken image icon if fallback also fails
-        ;(e.target as HTMLImageElement).style.visibility = 'hidden'
+        // Graceful degradation: frame 1 -> fallback -> hidden.
+        const img = e.target as HTMLImageElement
+        if (img.src.endsWith(firstFrame)) {
+          img.src = fallback
+        } else {
+          img.style.visibility = 'hidden'
+        }
       }}
       style={{
         width: '100%',
