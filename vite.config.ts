@@ -6,6 +6,13 @@ const backendUrl = process.env.VITE_BACKEND_URL || 'http://localhost:8420'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Build into the plugin package so the npm-publishable bundle ships a
+    // ready-to-serve dashboard and the backend's @fastify/static can locate
+    // it without an extra copy step.
+    outDir: 'server-ts/dist-frontend',
+    emptyOutDir: true,
+  },
   server: {
     proxy: {
       // NPC chat and /api/cycle/start both wait on a 30-90s `openclaw agent`

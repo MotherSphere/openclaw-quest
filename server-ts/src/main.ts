@@ -5,9 +5,14 @@
  * Subsequent steps will layer in the SQLite models, WebSocket fan-out,
  * watcher, cycle runner, and the full 43-endpoint REST surface. */
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
+import fastifyStatic from "@fastify/static";
 
 import { HOST, PORT } from "./config.ts";
 import { initDb, getEvents, getState, getSkills } from "./models.ts";
@@ -82,6 +87,34 @@ app.get("/ws", { websocket: true }, (socket) => {
     socket.send(JSON.stringify({ type: "event", data: event }));
   }
 });
+
+// Static SPA serving — only active when a Vite build has produced
+// `server-ts/dist-frontend/`. In plain-dev mode the separate `npm run dev`
+// on :5173 proxies /api and /ws here; in plugin-install mode this block
+// hands the browser a ready-to-use dashboard directly from :8420.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const FRONTEND_DIR = join(HERE, "..", "dist-frontend");
+if (existsSync(FRONTEND_DIR)) {
+  await app.register(fastifyStatic, {
+    root: FRONTEND_DIR,
+    prefix: "/",
+    wildcard: false,
+    index: ["index.html"],
+  });
+  app.setNotFoundHandler((request, reply) => {
+    const url = request.url.split("?")[0] ?? "";
+    if (url.startsWith("/api") || url.startsWith("/ws")) {
+      reply.code(404).send({ error: "not found" });
+      return;
+    }
+    reply.sendFile("index.html");
+  });
+  app.log.info(`Serving built dashboard from ${FRONTEND_DIR}`);
+} else {
+  app.log.warn(
+    `Frontend bundle not found at ${FRONTEND_DIR}. Run \`npm run build\` at the repo root, or start Vite separately with \`npm run dev\`.`,
+  );
+}
 
 try {
   await app.listen({ host: HOST, port: PORT });
