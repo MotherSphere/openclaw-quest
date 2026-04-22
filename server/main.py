@@ -34,6 +34,7 @@ from config import (
     PORT,
     PROXY_URL,
     QUEST_CYCLE_PROMPT,
+    QUEST_CYCLE_ENABLED,
     QUEST_SKILL_DIR,
     QUESTS_PENDING_FILE,
     QUESTS_V2_FILE,
@@ -1181,37 +1182,29 @@ async def cycle_start():
     """Manually trigger a quest evolution cycle."""
     import subprocess, os, time
 
-    # Serialize the entire check-and-launch to prevent double-cycle TOCTOU race
+    if not QUEST_CYCLE_ENABLED:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "disabled",
+                "message": "Quest cycle is disabled. Set QUEST_CYCLE_ENABLED=1 to enable Phase 2 flow.",
+            },
+        )
+
     async with _cycle_lock:
-        # Check lock file
         if CYCLE_LOCK_FILE.exists():
             try:
                 ts = int(CYCLE_LOCK_FILE.read_text().strip())
-                if time.time() - ts < GAME_BALANCE["cycle_lock_timeout"]:  # 30 min
+                if time.time() - ts < GAME_BALANCE["cycle_lock_timeout"]:
                     return {"status": "already_running"}
             except (ValueError, OSError):
                 pass
 
-        # Ensure feedback digest exists before cycle starts
         async with _digest_lock:
             if not FEEDBACK_DIGEST_FILE.exists():
                 FEEDBACK_DIGEST_FILE.parent.mkdir(parents=True, exist_ok=True)
                 FEEDBACK_DIGEST_FILE.write_text(json.dumps(_read_feedback_digest(), indent=2))
 
-        # Phase 1a: cycle spawn is not yet ported from Hermes Agent to OpenClaw.
-        # OpenClaw is a Node.js runtime with a different invocation model
-        # (openclaw chat / skills, not python -m hermes_cli.main). Phase 2
-        # will rewire this endpoint to spawn an OpenClaw flow or subagent.
-        return JSONResponse(
-            status_code=501,
-            content={
-                "status": "not_implemented",
-                "message": "Cycle spawn not implemented in Phase 1a. OpenClaw flow integration ships in Phase 2.",
-            },
-        )
-
-        # Unreachable in Phase 1a — preserved so Phase 2 can diff against
-        # the original Hermes spawn logic.
         try:
             synced_skill = _sync_quest_skill_template()
         except (OSError, FileNotFoundError) as exc:
@@ -1222,38 +1215,28 @@ async def cycle_start():
         CYCLE_LOCK_FILE.write_text(str(int(time.time())))
 
         env = os.environ.copy()
+        env["QUEST_CYCLE_TRIGGER"] = "manual"
         cycle_log = None
         try:
             CYCLE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             cycle_log = open(CYCLE_LOG_FILE, "a", encoding="utf-8")
             subprocess.Popen(
-                [
-                    str(AGENT_RUNTIME_BIN),
-                    "-m",
-                    "hermes_cli.main",
-                    "chat",
-                    "-s",
-                    "quest",
-                    "--yolo",
-                    "-q",
-                    QUEST_CYCLE_PROMPT,
-                ],
-                cwd=str(AGENT_RUNTIME_HOME),
+                [sys.executable, "-m", "quest_cycle", "manual"],
+                cwd=str(Path(__file__).parent),
                 env=env,
                 stdout=cycle_log,
                 stderr=cycle_log,
+                start_new_session=True,
             )
         except OSError as exc:
-            # Clean up lock on failure
             CYCLE_LOCK_FILE.unlink(missing_ok=True)
             logger.error("Failed to start cycle: %s", exc)
             return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
         finally:
             if cycle_log:
                 cycle_log.close()
-    # Chronicle: cycle started (persists + broadcasts)
-    await chronicle_event("cycle_start", {})
-    return {"status": "started", "quest_skill_path": str(synced_skill)}
+
+    return {"status": "started", "quest_skill_path": str(synced_skill), "mode": "native"}
 
 
 @app.get("/api/cycle/status")
