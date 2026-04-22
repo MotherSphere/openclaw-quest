@@ -604,51 +604,66 @@ async def api_delete_skill(skill_name: str):
 
 @app.get("/api/hub/search")
 async def api_hub_search(q: str = Query("", min_length=0)):
-    """Search the agent's Skills Hub (optional-skills + GitHub taps)."""
-    sources = _create_hub_sources()
-    if sources is None:
-        logger.info("Hub search unavailable; agent runtime not found at %s", AGENT_RUNTIME_HOME)
+    """Search ClawHub via `openclaw skills search --json`.
+
+    ClawHub is OpenClaw's skill registry — the native replacement for the
+    Hermes-era optional-skills + GitHub-taps pair this endpoint used to call.
+    Results are normalised into the shape the SHOP panel already expects.
+    """
+    import subprocess, asyncio
+    if not AGENT_RUNTIME_BIN.exists():
+        return []
+    cmd = [str(AGENT_RUNTIME_BIN), "skills", "search", "--json", "--limit", "20"]
+    if q.strip():
+        cmd.append(q.strip())
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=20,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("hub search subprocess error: %s", exc)
+        return []
+    if result.returncode != 0:
+        logger.warning("openclaw skills search failed (%d): %s", result.returncode, (result.stderr or "")[:200])
         return []
     try:
-        results = []
-        query = q.strip() if q.strip() else ""
-        for source in sources:
-            try:
-                hits = source.search(query, limit=20)
-                for h in hits:
-                    results.append({
-                        "name": h.name,
-                        "description": h.description,
-                        "source": h.source,
-                        "identifier": h.identifier,
-                        "trust_level": h.trust_level,
-                        "tags": h.tags,
-                    })
-            except Exception as e:
-                logger.warning("Hub search error from %s: %s", source.source_id(), e)
-        return results
-    except Exception as e:
-        logger.error("Hub search failed: %s", e)
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
         return []
+    hits = payload.get("results", []) or []
+    return [
+        {
+            "name": h.get("displayName") or h.get("slug") or "",
+            "description": h.get("summary", "") or "",
+            "source": "clawhub",
+            "identifier": h.get("slug", ""),
+            "trust_level": "verified",
+            "tags": [],
+        }
+        for h in hits
+        if h.get("slug")
+    ]
 
 
 @app.post("/api/hub/install")
 async def api_hub_install(body: dict):
-    """Install a skill from the hub by identifier."""
-    import shutil, tempfile
-    identifier = body.get("identifier", "")
+    """Install a skill from ClawHub via `openclaw skills install <slug>`.
+
+    Gold is deducted up front and refunded on any non-zero exit — so a
+    typo'd slug or a network blip leaves the player's wallet intact.
+    """
+    import subprocess, asyncio
+    identifier = (body.get("identifier", "") or "").strip()
     if not identifier:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Missing identifier"})
-
-    sources = _create_hub_sources()
-    if sources is None:
+    if not AGENT_RUNTIME_BIN.exists():
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "message": f"Agent runtime not found at {AGENT_RUNTIME_HOME}"},
+            content={"status": "error", "message": f"OpenClaw runtime not found at {AGENT_RUNTIME_BIN}"},
         )
 
-    # Skill install costs gold
     skill_cost = GAME_BALANCE.get("skill_install_cost", 300)
+    # Debit up front so concurrent requests can't double-spend.
     async with _state_lock:
         try:
             _st = json.loads(STATE_FILE.read_text())
@@ -659,54 +674,45 @@ async def api_hub_install(body: dict):
         _st["gold"] = _st.get("gold", 0) - skill_cost
         STATE_FILE.write_text(json.dumps(_st, indent=2))
         await upsert_state(_st)
+
+    async def _refund():
+        async with _state_lock:
+            try:
+                st = json.loads(STATE_FILE.read_text())
+            except Exception:
+                st = {}
+            st["gold"] = st.get("gold", 0) + skill_cost
+            STATE_FILE.write_text(json.dumps(st, indent=2))
+            await upsert_state(st)
+
     try:
-        for source in sources:
-            bundle = source.fetch(identifier)
-            if bundle:
-                # Simple install: write bundle files to skills dir
-                skill_name = bundle.name or identifier.split("/")[-1]
-                install_dir = SKILLS_DIR / skill_name
-                install_dir.mkdir(parents=True, exist_ok=True)
-                for fname, fcontent in bundle.files.items():
-                    fpath = install_dir / fname
-                    fpath.parent.mkdir(parents=True, exist_ok=True)
-                    if isinstance(fcontent, bytes):
-                        fpath.write_bytes(fcontent)
-                    else:
-                        fpath.write_text(str(fcontent))
-                # Re-sync skills
-                await watcher._sync_filesystem_skills()
-                # Chronicle: skill acquired from hub (persists + broadcasts)
-                await chronicle_event("hub_acquire", {"skill": skill_name, "source": bundle.source, "identifier": identifier})
-                # Broadcast state update so gold change is reflected
-                try:
-                    _updated_state = json.loads(STATE_FILE.read_text())
-                    await manager.broadcast({"type": "state", "data": _updated_state})
-                except Exception:
-                    pass
-                return {"status": "installed", "name": skill_name, "message": f"Installed {skill_name} from {bundle.source}"}
-        # Skill not found -- refund gold
-        async with _state_lock:
-            try:
-                _st = json.loads(STATE_FILE.read_text())
-            except Exception:
-                _st = {}
-            _st["gold"] = _st.get("gold", 0) + skill_cost
-            STATE_FILE.write_text(json.dumps(_st, indent=2))
-            await upsert_state(_st)
-        return JSONResponse(status_code=404, content={"status": "error", "message": f"Skill not found: {identifier}"})
-    except Exception as e:
-        # Install failed -- refund gold
-        logger.error("Hub install failed: %s", e)
-        async with _state_lock:
-            try:
-                _st = json.loads(STATE_FILE.read_text())
-            except Exception:
-                _st = {}
-            _st["gold"] = _st.get("gold", 0) + skill_cost
-            STATE_FILE.write_text(json.dumps(_st, indent=2))
-            await upsert_state(_st)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+        cmd = [str(AGENT_RUNTIME_BIN), "skills", "install", identifier]
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        await _refund()
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
+
+    if result.returncode != 0:
+        await _refund()
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error", "message": (result.stderr or "install failed")[:300]},
+        )
+
+    # Successful install: sync skills, log to chronicle, broadcast state
+    try:
+        await watcher._sync_filesystem_skills()
+    except Exception as exc:
+        logger.warning("post-install skills sync failed: %s", exc)
+    await chronicle_event("hub_acquire", {"skill": identifier, "source": "clawhub", "identifier": identifier})
+    try:
+        _updated_state = json.loads(STATE_FILE.read_text())
+        await manager.broadcast({"type": "state", "data": _updated_state})
+    except Exception:
+        pass
+    return {"status": "installed", "name": identifier, "message": f"Installed {identifier} from ClawHub"}
 
 @app.get("/api/regions")
 async def api_regions():
@@ -1583,59 +1589,38 @@ async def reflection_latest():
     if REFLECTION_LETTER_FILE.exists():
         return {"letter": REFLECTION_LETTER_FILE.read_text(), "pending": pending}
     if pending:
-        # Generate reflection letter using LLM
+        # Generate reflection letter via the OpenClaw agent
         try:
-            from npc_chat import _get_codex_client
+            from openclaw_agent import call_agent
+            import asyncio as _asyncio
             prompt_path = Path(__file__).parent / "prompts" / "reflection" / "letter.md"
-            if prompt_path.exists():
-                template = prompt_path.read_text()
-                template = template.replace("{{name}}", _st.get("name", "Adventurer"))
-                template = template.replace("{{level}}", str(_st.get("level", 1)))
-                template = template.replace("{{class}}", _st.get("class", "unknown"))
-                # Gather recent events
-                try:
-                    recent = await get_events(limit=10)
-                    recent_text = "; ".join([e.get("title", e.get("text", ""))[:80] for e in recent]) if recent else "(no recent events)"
-                except Exception:
-                    recent_text = "(unavailable)"
-                template = template.replace("{{recent_events}}", recent_text)
-                # Gather active quests
-                try:
-                    all_q = await get_quests()
-                    active_q = [q["title"] for q in all_q if q.get("status") in ("active", "in_progress", "pending")]
-                    quests_text = "; ".join(active_q) if active_q else "(no active quests)"
-                except Exception:
-                    quests_text = "(unavailable)"
-                template = template.replace("{{active_quests}}", quests_text)
-                template = template.replace("{{total_cycles}}", str(_st.get("total_cycles", 0)))
+            template = prompt_path.read_text() if prompt_path.exists() else (
+                "Write a short heartfelt reflection letter from {{name}} — a Level {{level}} {{class}} — "
+                "who has just fallen. Reference recent events: {{recent_events}} and active quests: {{active_quests}}. "
+                "Total cycles so far: {{total_cycles}}. 3-5 short sentences, first person."
+            )
+            template = template.replace("{{name}}", _st.get("name", "Adventurer"))
+            template = template.replace("{{level}}", str(_st.get("level", 1)))
+            template = template.replace("{{class}}", _st.get("class", "unknown"))
+            try:
+                recent = await get_events(limit=10)
+                recent_text = "; ".join([e.get("title", e.get("text", ""))[:80] for e in recent]) if recent else "(no recent events)"
+            except Exception:
+                recent_text = "(unavailable)"
+            template = template.replace("{{recent_events}}", recent_text)
+            try:
+                all_q = await get_quests()
+                active_q = [q["title"] for q in all_q if q.get("status") in ("active", "in_progress", "pending")]
+                quests_text = "; ".join(active_q) if active_q else "(no active quests)"
+            except Exception:
+                quests_text = "(unavailable)"
+            template = template.replace("{{active_quests}}", quests_text)
+            template = template.replace("{{total_cycles}}", str(_st.get("total_cycles", 0)))
 
-                result = _get_codex_client()
-                if result:
-                    client, http = result
-                    try:
-                        import re as _re
-                        _instr_match = _re.search(r'instruction:\s*"([^"]+)"', template)
-                        _sys_instr = _instr_match.group(1) if _instr_match else "You write heartfelt reflection letters from an RPG adventurer's perspective."
-                        stream = await client.responses.create(
-                            model=MODEL,
-                            instructions=_sys_instr,
-                            input=[{"role": "user", "content": template}],
-                            store=False,
-                            stream=True,
-                        )
-                        reply_parts = []
-                        async for event in stream:
-                            if hasattr(event, "type"):
-                                if event.type == "response.output_text.delta":
-                                    reply_parts.append(event.delta)
-                                elif event.type == "response.completed":
-                                    break
-                        letter = "".join(reply_parts).strip()
-                        if letter:
-                            REFLECTION_LETTER_FILE.write_text(letter)
-                            return {"letter": letter, "pending": True}
-                    finally:
-                        await http.aclose()
+            letter = await _asyncio.to_thread(call_agent, template, timeout=90, thinking="minimal")
+            if letter:
+                REFLECTION_LETTER_FILE.write_text(letter)
+                return {"letter": letter, "pending": True}
         except Exception as e:
             logger.error(f"Failed to generate reflection letter: {e}")
         return {"letter": "Your stability has reached zero. Take a moment to reflect on your journey. What went wrong? What can you learn?", "pending": True}
@@ -1781,80 +1766,55 @@ Rules:
 - Include at least one joke or banter between NPCs
 - End with someone raising a toast or making a prediction"""
 
-        from npc_chat import _get_codex_client
-        result = _get_codex_client()
-        if not result:
+        from openclaw_agent import call_agent
+        import asyncio
+        raw = await asyncio.to_thread(call_agent, prompt, timeout=90, thinking="off") or ""
+        if not raw.strip():
             _tavern_generating = False
             return {"status": "llm_unavailable"}
-        
-        client, http_client = result
-        try:
-            stream = await client.responses.create(
-                model=MODEL,
-                instructions="You generate NPC tavern dialogue.",
-                input=[{"role": "user", "content": prompt}],
-                store=False,
-                stream=True,
-            )
-            
-            parts = []
-            async for event in stream:
-                if hasattr(event, 'type'):
-                    if event.type == 'response.output_text.delta':
-                        parts.append(event.delta)
-                    elif event.type == 'response.completed':
-                        break
-            
-            await http_client.aclose()
-            raw = "".join(parts).strip()
-            
-            # Parse into structured messages
-            messages = []
-            npc_names = {"lyra": "Lyra", "aldric": "Aldric", "kael": "Kael", "gus": "Gus", "orin": "Orin"}
-            import re as _re_parser
-            for line in raw.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                # Strip leading bullets/asterisks/dashes
-                line = _re_parser.sub(r"^[\*\-\u2022\s]+", "", line).strip()
-                if not line:
-                    continue
-                matched = False
-                for npc_id, npc_display in npc_names.items():
-                    # Handle: lyra:, Lyra:, LYRA:, **Lyra**:, *Lyra*:
-                    pattern = _re_parser.compile(
-                        r"^[\*_]*" + _re_parser.escape(npc_id) + r"[\*_]*\s*:",
-                        _re_parser.IGNORECASE,
-                    )
-                    m = pattern.match(line)
-                    if m:
-                        text = line[m.end():].strip()
-                        if text.startswith("\"") and text.endswith("\""):
-                            text = text[1:-1]
-                        messages.append({"npc": npc_id, "name": npc_display, "text": text})
-                        matched = True
-                        break
-            # Fallback: if no messages parsed, return raw text as Gus
-            if not messages and raw.strip():
-                messages.append({"npc": "gus", "name": "Gus", "text": raw.strip()[:500]})
-            from datetime import datetime, timezone
-            result_data = {
-                "messages": messages,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            TAVERN_CACHE_FILE.write_text(json.dumps(result_data, indent=2, ensure_ascii=False))
-            
-            _tavern_generating = False
-            return result_data
-        except Exception as e:
-            try: await http_client.aclose()
-            except Exception: pass
-            _tavern_generating = False
-            return {"status": "error", "detail": str(e)}
+
+        messages = _parse_tavern_lines(raw)
+        result_data = {
+            "messages": messages,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        TAVERN_CACHE_FILE.write_text(json.dumps(result_data, indent=2, ensure_ascii=False))
+        _tavern_generating = False
+        return result_data
     except Exception as e:
         _tavern_generating = False
         return {"status": "error", "detail": str(e)}
+
+
+def _parse_tavern_lines(raw: str) -> list[dict]:
+    """Extract `npc_id: dialogue` lines into structured messages. Tolerates
+    markdown wrappers (**Lyra**:), leading bullets, and quoted strings."""
+    import re as _re_parser
+    npc_names = {"lyra": "Lyra", "aldric": "Aldric", "kael": "Kael", "gus": "Gus", "orin": "Orin"}
+    messages: list[dict] = []
+    for line in raw.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        line = _re_parser.sub(r"^[\*\-\u2022\s]+", "", line).strip()
+        if not line:
+            continue
+        for npc_id, npc_display in npc_names.items():
+            pattern = _re_parser.compile(
+                r"^[\*_]*" + _re_parser.escape(npc_id) + r"[\*_]*\s*:",
+                _re_parser.IGNORECASE,
+            )
+            m = pattern.match(line)
+            if m:
+                text = line[m.end():].strip()
+                if text.startswith('"') and text.endswith('"'):
+                    text = text[1:-1]
+                if text:
+                    messages.append({"npc": npc_id, "name": npc_display, "text": text})
+                break
+    if not messages and raw.strip():
+        messages.append({"npc": "gus", "name": "Gus", "text": raw.strip()[:500]})
+    return messages
 
 
 @app.post("/api/tavern/reply")
@@ -1874,7 +1834,7 @@ async def tavern_reply(body: dict):
             pass
 
     # Load NPC personalities from tavern-chat.md
-    from npc_chat import _load_prompt, _get_codex_client
+    from npc_chat import _load_prompt
     npc_personalities = _load_prompt("tavern/group-chat") or ""
     # Extract just the Cast section for reference
     cast_section = ""
@@ -1923,149 +1883,73 @@ Write 2-4 NPC reactions. Multiple NPCs should respond, not just one. Rules:
 - IMPORTANT: Generate responses for MULTIPLE different NPCs, not just one
 """
 
-    result = _get_codex_client()
-    if not result:
+    from openclaw_agent import call_agent
+    import asyncio
+    raw = await asyncio.to_thread(call_agent, prompt, timeout=60, thinking="off") or ""
+    if not raw.strip():
         return {"messages": [{"npc": "gus", "name": "Gus", "text": "*wipes the counter silently*"}]}
-
-    client, http_client = result
-    try:
-        stream = await client.responses.create(
-            model=MODEL,
-            instructions="You generate NPC tavern dialogue reactions to the adventurer speaking.",
-            input=[{"role": "user", "content": prompt}],
-            store=False,
-            stream=True,
-        )
-
-        parts = []
-        async for event in stream:
-            if hasattr(event, 'type'):
-                if event.type == 'response.output_text.delta':
-                    parts.append(event.delta)
-                elif event.type == 'response.completed':
-                    break
-
-        await http_client.aclose()
-        raw = "".join(parts).strip()
-
-        # Parse npc_id: text lines (same logic as tavern_generate)
-        messages = []
-        npc_names = {"lyra": "Lyra", "aldric": "Aldric", "kael": "Kael", "gus": "Gus", "orin": "Orin"}
-        import re as _re_reply
-        for line in raw.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            line = _re_reply.sub(r"^[\*\-\u2022\s]+", "", line).strip()
-            if not line:
-                continue
-            for npc_id, npc_display in npc_names.items():
-                pattern = _re_reply.compile(
-                    r"^[\*_]*" + _re_reply.escape(npc_id) + r"[\*_]*\s*:",
-                    _re_reply.IGNORECASE,
-                )
-                m = pattern.match(line)
-                if m:
-                    text = line[m.end():].strip()
-                    if text.startswith('"') and text.endswith('"'):
-                        text = text[1:-1]
-                    messages.append({"npc": npc_id, "name": npc_display, "text": text})
-                    break
-
-        if not messages and raw.strip():
-            messages.append({"npc": "gus", "name": "Gus", "text": raw.strip()[:500]})
-
-        return {"messages": messages}
-    except Exception as e:
-        logger.error(f"Tavern reply error: {e}")
-        try:
-            await http_client.aclose()
-        except Exception:
-            pass
-        return {"messages": [{"npc": "gus", "name": "Gus", "text": "*wipes the counter silently*"}]}
+    return {"messages": _parse_tavern_lines(raw)}
 
 # === Rumors (Twitter/X Integration) ===
 
+async def _generate_tavern_rumors(topic: str, max_count: int) -> dict:
+    """Ask the OpenClaw agent to invent in-character tavern rumours.
+
+    Replaces the Twitter/X retrieval the Hermes version used. No external
+    dependency — Gus just makes up colourful medieval-fantasy gossip that
+    fits the topic. Robust one-line-per-rumor parse.
+    """
+    from openclaw_agent import call_agent
+    import asyncio
+    topic = (topic or "").strip() or "the adventurer"
+    prompt = (
+        "You are Gus the tavern keeper compiling rumours you overheard tonight "
+        f"about: \"{topic}\". "
+        f"Produce exactly {max_count} short rumours. Each MUST be on its own line in this "
+        "EXACT format, nothing else (no preamble, no epilogue, no markdown, no numbering):\n\n"
+        "RUMOR: <anonymous source handle, 1-3 words, evocative> | <one short gossip sentence in "
+        "the tavern's voice — cryptic, colourful, medieval-fantasy tone, NOT actual news>\n"
+    )
+    reply = await asyncio.to_thread(call_agent, prompt, timeout=60, thinking="off")
+    if not reply:
+        return {"ok": False, "error": "agent unavailable"}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rumors: list[dict] = []
+    for raw in reply.splitlines():
+        line = raw.strip()
+        if not line.lower().startswith("rumor:"):
+            continue
+        body = line.split(":", 1)[1]
+        parts = [p.strip() for p in body.split("|")]
+        if len(parts) < 2:
+            continue
+        handle = parts[0][:40]
+        text = parts[1][:280]
+        rumors.append({
+            "id": f"gen-{abs(hash(line)) % (10**10)}",
+            "text": text,
+            "author": handle,
+            "handle": handle,
+            "avatar": "",
+            "likes": 0,
+            "retweets": 0,
+            "time": now_iso,
+        })
+        if len(rumors) >= max_count:
+            break
+    return {"ok": True, "rumors": rumors}
+
+
 @app.get("/api/rumors/search")
-async def rumors_search(q: str = Query("AI", min_length=1), max: int = Query(10, ge=1, le=50)):
-    """Search X/Twitter for rumors via twitter-cli."""
-    import subprocess, os
-    if not TWITTER_CLI:
-        return {"ok": False, "error": "twitter cli unavailable"}
-    env = os.environ.copy()
-    env["TWITTER_AUTH_TOKEN"] = os.getenv("TWITTER_AUTH_TOKEN", "")
-    env["TWITTER_CT0"] = os.getenv("TWITTER_CT0", "")
-    env["https_proxy"] = PROXY_URL
-    env["http_proxy"] = PROXY_URL
-    try:
-        result = subprocess.run(
-            [TWITTER_CLI, "search", q, "--max", str(max), "--json"],
-            capture_output=True, text=True, timeout=30, env=env,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data.get("ok"):
-                tweets = data.get("data", [])
-                rumors = []
-                for t in tweets:
-                    rumors.append({
-                        "id": t.get("id"),
-                        "text": t.get("text", ""),
-                        "author": t.get("author", {}).get("name", "Unknown"),
-                        "handle": t.get("author", {}).get("screenName", ""),
-                        "avatar": t.get("author", {}).get("profileImageUrl", ""),
-                        "likes": t.get("metrics", {}).get("likes", 0),
-                        "retweets": t.get("metrics", {}).get("retweets", 0),
-                        "time": t.get("createdAt", ""),
-                    })
-                return {"ok": True, "rumors": rumors}
-            return {"ok": False, "error": data.get("error", {}).get("message", "unknown")}
-        return {"ok": False, "error": result.stderr[:200]}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+async def rumors_search(q: str = Query("", min_length=0), max: int = Query(6, ge=1, le=12)):
+    """Tavern gossip about a specific topic, generated by the OpenClaw agent."""
+    return await _generate_tavern_rumors(q, max)
 
 
 @app.get("/api/rumors/feed")
-async def rumors_feed(max: int = Query(10, ge=1, le=50)):
-    """Get home timeline as rumors."""
-    import subprocess, os
-    if not TWITTER_CLI:
-        return {"ok": False, "error": "twitter cli unavailable"}
-    env = os.environ.copy()
-    env["TWITTER_AUTH_TOKEN"] = os.getenv("TWITTER_AUTH_TOKEN", "")
-    env["TWITTER_CT0"] = os.getenv("TWITTER_CT0", "")
-    env["https_proxy"] = PROXY_URL
-    env["http_proxy"] = PROXY_URL
-    try:
-        result = subprocess.run(
-            [TWITTER_CLI, "feed", "--max", str(max), "--json"],
-            capture_output=True, text=True, timeout=30, env=env,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data.get("ok"):
-                tweets = data.get("data", [])
-                rumors = []
-                for t in tweets:
-                    rumors.append({
-                        "id": t.get("id"),
-                        "text": t.get("text", ""),
-                        "author": t.get("author", {}).get("name", "Unknown"),
-                        "handle": t.get("author", {}).get("screenName", ""),
-                        "avatar": t.get("author", {}).get("profileImageUrl", ""),
-                        "likes": t.get("metrics", {}).get("likes", 0),
-                        "retweets": t.get("metrics", {}).get("retweets", 0),
-                        "time": t.get("createdAt", ""),
-                    })
-                return {"ok": True, "rumors": rumors}
-            return {"ok": False, "error": data.get("error", {}).get("message", "unknown")}
-        return {"ok": False, "error": result.stderr[:200]}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+async def rumors_feed(max: int = Query(6, ge=1, le=12)):
+    """General tavern gossip (no topic) — same mechanism as /search with no query."""
+    return await _generate_tavern_rumors("", max)
 
 
 

@@ -113,6 +113,10 @@ class QuestCycleRunner:
         # EVE's recent task labels. Subsequent cycles find workflows already
         # present and skip this step.
         self._seed_workflows_if_empty()
+        # Sites file is independent — a map seeded by an older version of
+        # this runner (before Phase 7) won't have sites.json, so the WORLD
+        # MAP renders empty. Backfill it deterministically when missing.
+        self._ensure_sites_from_workflows()
 
         workflows = self.map_data.get("workflows", []) if isinstance(self.map_data, dict) else []
         skill_sentiment = self.digest.get("skill_sentiment", {}) if isinstance(self.digest, dict) else {}
@@ -533,7 +537,48 @@ class QuestCycleRunner:
         }
         self._write_json(MAP_FILE, self.map_data)
 
-        logger.info("seeded %d starter workflows into the atlas", len(workflows))
+        # Also seed sites.json — the frontend WORLD MAP renders sites, not
+        # workflows directly. We map category -> sprite slug (the sprites at
+        # /sprites/continent-*.png are themselves optional AI-generated
+        # assets; if missing, the site still renders with a fallback). The
+        # 6 slot ids (starter-town, site-1..5) match the fixed grid the
+        # frontend lays out.
+        category_sprite = {
+            "coding": "software-engineering",
+            "research": "research-knowledge",
+            "automation": "automation-tools",
+            "creative": "creative-arts",
+        }
+        slot_ids = ["starter-town", "site-1", "site-2", "site-3", "site-4", "site-5"]
+        sites: list[dict[str, Any]] = []
+        for idx, wf in enumerate(workflows):
+            slot = slot_ids[idx] if idx < len(slot_ids) else f"site-{idx}"
+            sites.append({
+                "id": slot,
+                "name": wf["name"],
+                "is_default": slot == "starter-town",
+                "defined": True,
+                "domain": wf["name"].lower(),
+                "workflow_id": wf["id"],
+                "sprite": category_sprite.get(wf["category"]) or "software-engineering",
+            })
+        # Fill remaining slots with undefined placeholders so the map UI shows
+        # fog-of-war spots for future domains to discover.
+        for idx in range(len(workflows), len(slot_ids)):
+            slot = slot_ids[idx]
+            sites.append({
+                "id": slot,
+                "name": None,
+                "is_default": slot == "starter-town",
+                "defined": False,
+                "domain": None,
+                "workflow_id": None,
+                "sprite": None,
+            })
+        from config import SITES_FILE
+        self._write_json(SITES_FILE, sites)
+
+        logger.info("seeded %d starter workflows into the atlas (+ %d sites)", len(workflows), len(sites))
         for wf in workflows:
             self._write_event("region_unlock", {
                 "name": wf["name"],
@@ -541,6 +586,61 @@ class QuestCycleRunner:
                 "category": wf["category"],
                 "reason": wf["description"],
             })
+
+    def _ensure_sites_from_workflows(self) -> None:
+        """Write sites.json from the current workflows if it doesn't exist yet.
+
+        Idempotent — reads the file, skips if non-empty. This catches the
+        case where knowledge-map.json was seeded by a pre-Phase-7 runner so
+        the WORLD MAP stays empty until a brand-new cycle reseed, which
+        would've wiped user progress.
+        """
+        from config import SITES_FILE
+        try:
+            if SITES_FILE.exists():
+                existing = json.loads(SITES_FILE.read_text())
+                if isinstance(existing, list) and existing:
+                    return
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        workflows = self.map_data.get("workflows", []) if isinstance(self.map_data, dict) else []
+        if not workflows:
+            return
+
+        category_sprite = {
+            "coding": "software-engineering",
+            "research": "research-knowledge",
+            "automation": "automation-tools",
+            "creative": "creative-arts",
+        }
+        slot_ids = ["starter-town", "site-1", "site-2", "site-3", "site-4", "site-5"]
+        sites: list[dict[str, Any]] = []
+        for idx, wf in enumerate(workflows):
+            slot = slot_ids[idx] if idx < len(slot_ids) else f"site-{idx}"
+            sites.append({
+                "id": slot,
+                "name": wf.get("name"),
+                "is_default": slot == "starter-town",
+                "defined": True,
+                "domain": (wf.get("name") or "").lower() or None,
+                "workflow_id": wf.get("id"),
+                "sprite": category_sprite.get(wf.get("category")) or "software-engineering",
+            })
+        for idx in range(len(workflows), len(slot_ids)):
+            slot = slot_ids[idx]
+            sites.append({
+                "id": slot,
+                "name": None,
+                "is_default": slot == "starter-town",
+                "defined": False,
+                "domain": None,
+                "workflow_id": None,
+                "sprite": None,
+            })
+        self._write_json(SITES_FILE, sites)
+        logger.info("backfilled sites.json with %d slots (%d defined) from existing workflows",
+                    len(sites), sum(1 for s in sites if s["defined"]))
 
     def _propose_quest(self, workflow: dict, target_skill: str | None) -> dict | None:
         """Ask the LLM to draft one concrete quest targeting the chosen
