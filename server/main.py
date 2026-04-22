@@ -2288,14 +2288,12 @@ if STATIC_DIR:
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        if full_path.startswith("api/") or full_path == "ws":
-            return JSONResponse(status_code=404, content={"error": "not found"})
-        file_path = STATIC_DIR / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(STATIC_DIR / "index.html")
+    # NOTE: the SPA catch-all (`@app.get("/{full_path:path}")`) used to live
+    # here, but FastAPI matches routes in registration order so it swallowed
+    # every /api/* endpoint declared later in the file — e.g. /api/openclaw/*
+    # and /api/bag/discard would 404 whenever `dist/` existed. The catch-all
+    # is now registered at the very bottom of this file, after every other
+    # route, so real endpoints win first.
 
 
 
@@ -2410,6 +2408,20 @@ async def openclaw_status():
     """Summary of the local OpenClaw instance: agents + task counts by status."""
     from openclaw_bridge import read_status_summary
     return read_status_summary()
+
+
+# SPA catch-all — MUST stay at the end of the file (see note by the
+# STATIC_DIR mount above). Serves index.html for any non-API path so the
+# React router can handle client-side routing in production.
+if STATIC_DIR:
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api/") or full_path == "ws":
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        file_path = STATIC_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
 
 
 if __name__ == "__main__":

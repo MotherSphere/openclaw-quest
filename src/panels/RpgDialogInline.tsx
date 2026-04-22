@@ -173,7 +173,20 @@ export default function RpgDialogInline({ npc, onClose, chatHistoryRef, prefillM
               <span style={{ fontFamily: 'var(--font-pixel)', fontSize: '6px', color: '#f0e68c', marginRight: '6px' }}>
                 {npc.name.toUpperCase()}
               </span>
-              ...
+              <span style={{ color: '#c8a87a' }}>
+                <span style={{ animation: 'npcDot 1.2s infinite', animationDelay: '0s' }}>●</span>
+                <span style={{ animation: 'npcDot 1.2s infinite', animationDelay: '0.2s', marginLeft: '3px' }}>●</span>
+                <span style={{ animation: 'npcDot 1.2s infinite', animationDelay: '0.4s', marginLeft: '3px' }}>●</span>
+              </span>
+              <span style={{ fontFamily: 'var(--font-pixel)', fontSize: '7px', color: '#6a5a3a', marginLeft: '12px', letterSpacing: '1px' }}>
+                thinking — can take up to a minute
+              </span>
+              <style>{`
+                @keyframes npcDot {
+                  0%, 80%, 100% { opacity: 0.3; }
+                  40% { opacity: 1; }
+                }
+              `}</style>
             </div>
           )}
         </div>
