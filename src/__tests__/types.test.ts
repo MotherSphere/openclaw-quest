@@ -93,7 +93,7 @@ describe('types', () => {
       description: 'Findings',
       source_quest: 'quest-1',
       created_at: '2026-03-13T14:30:00Z',
-      file_path: '~/.hermes/quest/completions/1.md',
+      file_path: '~/.openclaw/quest/completions/1.md',
       icon: 'scroll',
       rarity: 'common',
     }

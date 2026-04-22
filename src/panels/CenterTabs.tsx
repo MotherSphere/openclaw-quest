@@ -4,6 +4,7 @@ import KnowledgeMap from './KnowledgeMap'
 import SubRegionGraph from './SubRegionGraph'
 import GuildPanel from './GuildPanel'
 import Shop from './Shop'
+import EvePanel from './EvePanel'
 import { API_URL } from '../api'
 import { LS_KEYS } from '../constants/storage'
 import type { TabId, KnowledgeMap as KnowledgeMapType } from '../types'
@@ -19,7 +20,7 @@ import ShopBottomInfo from './ShopBottomInfo'
 // Extend window for SHOW TO NPC bridge
 declare global {
   interface Window {
-    __hermesShowToNpc?: (message: string) => void
+    __openclawShowToNpc?: (message: string) => void
   }
 }
 
@@ -28,6 +29,7 @@ const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'guild', label: 'GUILD' },
   { id: 'shop', label: 'SHOP' },
   { id: 'npc', label: 'TAVERN' },
+  { id: 'eve', label: 'EVE' },
 ]
 
 export default function CenterTabs() {
@@ -56,14 +58,14 @@ export default function CenterTabs() {
 
   // Register global bridge for SHOW TO NPC
   useEffect(() => {
-    window.__hermesShowToNpc = (message: string) => {
+    window.__openclawShowToNpc = (message: string) => {
       setActiveTab('npc')
       setNpcPrefill(message)
       // Use currently active NPC, or default to guild_master
       setChatNpc(prev => prev || 'guild_master')
       setActiveNpc(null)
     }
-    return () => { window.__hermesShowToNpc = undefined }
+    return () => { window.__openclawShowToNpc = undefined }
   }, [setActiveTab])
 
   // Clear prefill after chat NPC changes
@@ -162,6 +164,7 @@ export default function CenterTabs() {
         {activeTab === 'map' && <KnowledgeMap onContinentSelect={setMapSelectedContinent} />}
         {activeTab === 'guild' && <GuildPanel />}
         {activeTab === 'shop' && <Shop />}
+        {activeTab === 'eve' && <EvePanel />}
         {activeTab === 'npc' && (
           <TavernSceneArea
             sceneMode={sceneMode}

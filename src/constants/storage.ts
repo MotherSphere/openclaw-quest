@@ -1,5 +1,5 @@
 export const LS_KEYS = {
-  feedback: 'hermes-feedback-state',
-  logCleared: 'hermes-log-cleared-at',
-  npcHistory: 'hermes-npc-chat-history',
+  feedback: 'openclaw-feedback-state',
+  logCleared: 'openclaw-log-cleared-at',
+  npcHistory: 'openclaw-npc-chat-history',
 } as const

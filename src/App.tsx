@@ -46,7 +46,7 @@ function LoadingScreen({ progress }: { progress: number }) {
       zIndex: 99999,
     }}>
       <div style={{ fontSize: '14px', letterSpacing: '4px', color: '#f0e68c', marginBottom: '6px' }}>
-        HERMES QUEST
+        OPENCLAW QUEST
       </div>
       <div style={{ fontSize: '6px', color: '#8b7355', marginBottom: '24px', letterSpacing: '2px' }}>
         AI Self-Evolution RPG

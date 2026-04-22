@@ -21,7 +21,7 @@ describe('store', () => {
 
   it('AgentState maps stability/energy to hp/mp (v2 compat)', () => {
     useStore.getState().setState({
-      version: 1, name: 'Hermes', level: 2, class: 'artificer', title: 'Novice',
+      version: 1, name: 'EVE', level: 2, class: 'artificer', title: 'Novice',
       xp: 50, xp_to_next: 200,
       hp: 80, hp_max: 100,
       mp: 60, mp_max: 80,

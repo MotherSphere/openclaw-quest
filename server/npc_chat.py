@@ -6,6 +6,8 @@ from pathlib import Path
 from openai import AsyncOpenAI
 import httpx
 
+from config import AGENT_RUNTIME_HOME, QUESTS_V2_FILE, EVENTS_FILE
+
 logger = logging.getLogger(__name__)
 
 import re as _re_sanitize
@@ -22,11 +24,14 @@ def _sanitize_value(value: str, max_len: int = 200) -> str:
     value = _INJECTION_PATTERNS.sub("[FILTERED]", value)
     return value
 
-sys.path.insert(0, str(Path.home() / ".hermes" / "hermes-agent"))
+# Phase 1a: NPC chat still resolves Codex credentials via the legacy
+# hermes_cli.auth module. Phase 2 will replace this with an OpenClaw-native
+# credential source.
+sys.path.insert(0, str(AGENT_RUNTIME_HOME))
 
 def _get_codex_client():
     try:
-        from hermes_cli.auth import resolve_codex_runtime_credentials
+        from hermes_cli.auth import resolve_codex_runtime_credentials  # noqa: F401 — legacy path, Phase 2 will replace
         creds = resolve_codex_runtime_credentials()
         base_url = creds.get("base_url", "").rstrip("/")
         api_key = creds.get("api_key", "")
@@ -81,7 +86,7 @@ _prompt_cache: dict[str, tuple[float, str]] = {}  # npc_id -> (mtime, content)
 
 
 def _load_prompt(npc_id: str) -> str | None:
-    """Load prompt from /opt/hermes-quest/prompts/{npc_id}.md with mtime-based hot-reload."""
+    """Load prompt from /opt/openclaw-quest/prompts/{npc_id}.md with mtime-based hot-reload."""
     prompt_path = PROMPTS_DIR / f"{npc_id}.md"
     if not prompt_path.exists():
         return None
@@ -125,9 +130,8 @@ def _render_prompt(template: str, game_state: dict | None, context: dict | None,
     }
     # Count completed quests
     try:
-        quests_path = Path.home() / ".hermes" / "quest" / "quests.json"
-        if quests_path.exists():
-            all_quests = json.loads(quests_path.read_text())
+        if QUESTS_V2_FILE.exists():
+            all_quests = json.loads(QUESTS_V2_FILE.read_text())
             completed = [q for q in all_quests if q.get("status") == "completed"]
             replacements["completed_quests_count"] = str(len(completed))
     except Exception:
@@ -148,9 +152,8 @@ async def chat_with_npc(npc_id, message, context, game_state=None, history=None)
     # --- Build quests info ---
     quests_info = ""
     try:
-        quests_path = Path.home() / ".hermes" / "quest" / "quests.json"
-        if quests_path.exists():
-            all_quests = json.loads(quests_path.read_text())
+        if QUESTS_V2_FILE.exists():
+            all_quests = json.loads(QUESTS_V2_FILE.read_text())
             active_quests = [q for q in all_quests if q.get("status") in ("active", "in_progress")]
             if active_quests:
                 quest_lines = [f"- {q['title']} ({q.get('status','active')})" for q in active_quests[:5]]
@@ -161,9 +164,8 @@ async def chat_with_npc(npc_id, message, context, game_state=None, history=None)
     # --- Build events info ---
     events_info = ""
     try:
-        events_path = Path.home() / ".hermes" / "quest" / "events.jsonl"
-        if events_path.exists():
-            lines = events_path.read_text().strip().split("\n")
+        if EVENTS_FILE.exists():
+            lines = EVENTS_FILE.read_text().strip().split("\n")
             recent = []
             for line in reversed(lines):
                 if len(recent) >= 3:

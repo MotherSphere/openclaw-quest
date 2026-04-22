@@ -1,5 +1,5 @@
 import sys
-"""Hermes Quest Backend - FastAPI application."""
+"""OpenClaw Quest Backend - FastAPI application."""
 import asyncio
 import json
 import logging
@@ -23,10 +23,10 @@ from config import (
     EVENTS_FILE,
     FEEDBACK_DIGEST_FILE,
     GAME_BALANCE,
-    HERMES_AGENT_DIR,
-    HERMES_AGENT_PYTHON,
-    HERMES_AGENT_SITE_PACKAGES_GLOB,
-    HERMES_HOME,
+    AGENT_RUNTIME_BIN,
+    AGENT_RUNTIME_HOME,
+    AGENT_RUNTIME_SITE_PACKAGES_GLOB,
+    OPENCLAW_HOME,
     HOST,
     HUB_RECOMMENDATIONS_FILE,
     MAP_FILE,
@@ -120,7 +120,7 @@ def _read_feedback_digest() -> dict:
 def _get_quest_skill_template_path() -> Path:
     candidates = [
         Path(__file__).parent.parent / "templates" / "quest-skill.md",  # repo/server/main.py
-        Path(__file__).parent / "templates" / "quest-skill.md",  # flat deploy /opt/hermes-quest/main.py
+        Path(__file__).parent / "templates" / "quest-skill.md",  # flat deploy /opt/openclaw-quest/main.py
     ]
     for path in candidates:
         if path.exists():
@@ -129,7 +129,7 @@ def _get_quest_skill_template_path() -> Path:
 
 
 def _sync_quest_skill_template() -> Path:
-    """Ensure Hermes loads the project-managed quest skill template."""
+    """Ensure the agent runtime loads the project-managed quest skill template."""
     template_path = _get_quest_skill_template_path()
     if not template_path.exists():
         raise FileNotFoundError(f"Quest skill template not found: {template_path}")
@@ -428,20 +428,21 @@ watcher = QuestWatcher()
 def _ensure_agent_runtime_paths():
     import glob as _glob
 
-    if str(HERMES_AGENT_DIR) not in sys.path:
-        sys.path.insert(0, str(HERMES_AGENT_DIR))
+    if str(AGENT_RUNTIME_HOME) not in sys.path:
+        sys.path.insert(0, str(AGENT_RUNTIME_HOME))
 
-    for site_packages in _glob.glob(HERMES_AGENT_SITE_PACKAGES_GLOB):
-        if site_packages not in sys.path:
-            sys.path.insert(0, site_packages)
+    if AGENT_RUNTIME_SITE_PACKAGES_GLOB:
+        for site_packages in _glob.glob(AGENT_RUNTIME_SITE_PACKAGES_GLOB):
+            if site_packages not in sys.path:
+                sys.path.insert(0, site_packages)
 
 
 def _load_hub_module():
     import importlib.util
 
-    guard_path = HERMES_AGENT_DIR / "tools" / "skills_guard.py"
-    hub_path = HERMES_AGENT_DIR / "tools" / "skills_hub.py"
-    if not HERMES_AGENT_DIR.exists() or not guard_path.exists() or not hub_path.exists():
+    guard_path = AGENT_RUNTIME_HOME / "tools" / "skills_guard.py"
+    hub_path = AGENT_RUNTIME_HOME / "tools" / "skills_hub.py"
+    if not AGENT_RUNTIME_HOME.exists() or not guard_path.exists() or not hub_path.exists():
         return None
 
     _ensure_agent_runtime_paths()
@@ -472,12 +473,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     await watcher.initial_sync()
     task = asyncio.create_task(watcher.run())
-    logger.info("Hermes Quest backend started on %s:%d", HOST, PORT)
+    logger.info("OpenClaw Quest backend started on %s:%d", HOST, PORT)
     yield
     task.cancel()
 
 
-app = FastAPI(title="Hermes Quest", lifespan=lifespan)
+app = FastAPI(title="OpenClaw Quest", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -602,10 +603,10 @@ async def api_delete_skill(skill_name: str):
 
 @app.get("/api/hub/search")
 async def api_hub_search(q: str = Query("", min_length=0)):
-    """Search the Hermes Skills Hub (optional-skills + GitHub taps)."""
+    """Search the agent's Skills Hub (optional-skills + GitHub taps)."""
     sources = _create_hub_sources()
     if sources is None:
-        logger.info("Hub search unavailable; Hermes runtime not found at %s", HERMES_AGENT_DIR)
+        logger.info("Hub search unavailable; agent runtime not found at %s", AGENT_RUNTIME_HOME)
         return []
     try:
         results = []
@@ -642,7 +643,7 @@ async def api_hub_install(body: dict):
     if sources is None:
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "message": f"Hermes runtime not found at {HERMES_AGENT_DIR}"},
+            content={"status": "error", "message": f"Agent runtime not found at {AGENT_RUNTIME_HOME}"},
         )
 
     # Skill install costs gold
@@ -1197,23 +1198,29 @@ async def cycle_start():
                 FEEDBACK_DIGEST_FILE.parent.mkdir(parents=True, exist_ok=True)
                 FEEDBACK_DIGEST_FILE.write_text(json.dumps(_read_feedback_digest(), indent=2))
 
-        if not HERMES_AGENT_PYTHON.exists():
-            return JSONResponse(
-                status_code=503,
-                content={"status": "error", "message": f"Hermes runtime not found at {HERMES_AGENT_PYTHON}"},
-            )
+        # Phase 1a: cycle spawn is not yet ported from Hermes Agent to OpenClaw.
+        # OpenClaw is a Node.js runtime with a different invocation model
+        # (openclaw chat / skills, not python -m hermes_cli.main). Phase 2
+        # will rewire this endpoint to spawn an OpenClaw flow or subagent.
+        return JSONResponse(
+            status_code=501,
+            content={
+                "status": "not_implemented",
+                "message": "Cycle spawn not implemented in Phase 1a. OpenClaw flow integration ships in Phase 2.",
+            },
+        )
 
+        # Unreachable in Phase 1a — preserved so Phase 2 can diff against
+        # the original Hermes spawn logic.
         try:
             synced_skill = _sync_quest_skill_template()
         except (OSError, FileNotFoundError) as exc:
             logger.error("Failed to sync quest skill template before cycle: %s", exc)
             return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
 
-        # Write lock file BEFORE launching subprocess to prevent concurrent launches
         CYCLE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
         CYCLE_LOCK_FILE.write_text(str(int(time.time())))
 
-        # Trigger the quest skill directly so a manual cycle always runs immediately.
         env = os.environ.copy()
         cycle_log = None
         try:
@@ -1221,7 +1228,7 @@ async def cycle_start():
             cycle_log = open(CYCLE_LOG_FILE, "a", encoding="utf-8")
             subprocess.Popen(
                 [
-                    str(HERMES_AGENT_PYTHON),
+                    str(AGENT_RUNTIME_BIN),
                     "-m",
                     "hermes_cli.main",
                     "chat",
@@ -1231,7 +1238,7 @@ async def cycle_start():
                     "-q",
                     QUEST_CYCLE_PROMPT,
                 ],
-                cwd=str(HERMES_AGENT_DIR),
+                cwd=str(AGENT_RUNTIME_HOME),
                 env=env,
                 stdout=cycle_log,
                 stderr=cycle_log,
@@ -1261,7 +1268,7 @@ async def cycle_status():
                 if progress is None:
                     progress = {
                         "phase": "reflect",
-                        "summary": "Cycle started. Waiting for Hermes phase events...",
+                        "summary": "Cycle started. Waiting for phase events...",
                         "target_workflow": None,
                         "reason": None,
                         "progress": None,
@@ -1570,7 +1577,7 @@ async def feedback_digest():
 
 @app.post("/api/skill/quest/sync")
 async def sync_quest_skill():
-    """Sync the quest SKILL.md template to ~/.hermes/skills/quest/SKILL.md."""
+    """Sync the quest SKILL.md template to ~/.openclaw/skills/quest/SKILL.md."""
     try:
         target_file = _sync_quest_skill_template()
     except FileNotFoundError as exc:
@@ -1722,7 +1729,7 @@ async def tavern_generate():
         
         # Build context for LLM
         ctx_parts = [
-            f"Hermes is Level {state.get('level', 1)} {state.get('class', 'adventurer')} ({state.get('title', 'Novice')})",
+            f"{state.get('name', 'EVE')} is Level {state.get('level', 1)} {state.get('class', 'adventurer')} ({state.get('title', 'Novice')})",
             f"HP: {state.get('hp', 0)}/{state.get('hp_max', 100)}, MP: {state.get('mp', 0)}/100",
             f"Understanding: {state.get('understanding', 0)}%, Gold: {state.get('gold', 0)}",
             f"Total cycles: {state.get('total_cycles', 0)}, Skills: {state.get('skills_count', 0)}",
@@ -2107,7 +2114,7 @@ async def bag_item_content(item_id: str):
         stem = Path(name).stem if name else ""
         search_dirs = [
             QUEST_DIR,
-            HERMES_HOME,
+            OPENCLAW_HOME,
             SKILLS_DIR,
         ]
         for d in search_dirs:
@@ -2118,7 +2125,7 @@ async def bag_item_content(item_id: str):
                 break
         if not fp and stem:
             # Broader search: glob for files matching the stem
-            for match in HERMES_HOME.rglob(f"*{stem}*"):
+            for match in OPENCLAW_HOME.rglob(f"*{stem}*"):
                 if match.is_file() and "venv" not in str(match) and "__pycache__" not in str(match):
                     fp = str(match)
                     break
@@ -2404,6 +2411,22 @@ async def update_state_field(body: dict):
     await upsert_state(state)
     await manager.broadcast({"type": "state", "data": state})
     return {"ok": True}
+
+
+# --- OpenClaw bridge (Phase 1b: read-only view of EVE's live data) ---
+
+@app.get("/api/openclaw/tasks")
+async def openclaw_tasks(limit: int = 50):
+    """Read OpenClaw task runs from ~/.openclaw/tasks/runs.sqlite (read-only)."""
+    from openclaw_bridge import read_task_runs
+    return {"tasks": read_task_runs(limit=limit)}
+
+
+@app.get("/api/openclaw/status")
+async def openclaw_status():
+    """Summary of the local OpenClaw instance: agents + task counts by status."""
+    from openclaw_bridge import read_status_summary
+    return read_status_summary()
 
 
 if __name__ == "__main__":

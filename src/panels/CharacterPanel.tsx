@@ -78,7 +78,7 @@ export default function CharacterPanel() {
       {/* Portrait + Identity — horizontal layout */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', alignItems: 'center' }}>
         {/* Avatar — same size as NPC portraits */}
-        <img src="/avatar.png" alt="Hermes" style={{
+        <img src="/avatar.png" alt="Avatar" style={{
           width: '80px', height: '80px', flexShrink: 0,
           imageRendering: 'pixelated',
           border: '1px solid rgba(107,76,42,0.4)',
@@ -108,14 +108,14 @@ export default function CharacterPanel() {
             />
           ) : (
             <div
-              onClick={() => { setNameInput(state.name || 'Hermes'); setEditingName(true) }}
+              onClick={() => { setNameInput(state.name || 'EVE'); setEditingName(true) }}
               style={{
                 fontFamily: 'var(--font-pixel)', fontSize: '10px', color: 'var(--gold)',
                 letterSpacing: '1px', cursor: 'pointer',
               }}
               title="Click to edit name"
             >
-              {state.name || 'Hermes'}
+              {state.name || 'EVE'}
             </div>
           )}
           <div style={{ fontFamily: 'var(--font-pixel)', fontSize: '7px', color: 'var(--cyan)', marginTop: '4px' }}>
