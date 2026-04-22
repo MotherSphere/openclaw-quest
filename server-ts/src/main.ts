@@ -10,10 +10,21 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 
 import { HOST, PORT } from "./config.ts";
-import { initDb, getEvents, getState, getSkills, getQuests } from "./models.ts";
+import { initDb, getEvents, getState, getSkills } from "./models.ts";
 import { readStatusSummary, readTaskRuns } from "./openclaw-bridge.ts";
 import { manager } from "./ws-manager.ts";
 import { QuestWatcher } from "./watcher.ts";
+
+import { registerStateRoutes } from "./routes/state.ts";
+import { registerMapRoutes } from "./routes/map.ts";
+import { registerBagRoutes } from "./routes/bag.ts";
+import { registerSiteRoutes } from "./routes/sites.ts";
+import { registerFeedbackRoutes } from "./routes/feedback.ts";
+import { registerQuestRoutes } from "./routes/quests.ts";
+import { registerReflectionRoutes } from "./routes/reflection.ts";
+import { registerHubRoutes } from "./routes/hub.ts";
+import { registerRumorRoutes } from "./routes/rumors.ts";
+import { registerMiscRoutes } from "./routes/misc.ts";
 
 const app = Fastify({ logger: { level: "info" } });
 
@@ -25,9 +36,8 @@ const watcher = new QuestWatcher();
 await watcher.initialSync();
 void watcher.start(2000);
 
-app.get("/api/state", async () => {
-  return getState() ?? {};
-});
+// Core read endpoints wired directly to models/bridge
+app.get("/api/state", async () => getState() ?? {});
 
 app.get<{ Querystring: { limit?: string; offset?: string } }>(
   "/api/events",
@@ -40,10 +50,6 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
 
 app.get("/api/skills", async () => getSkills());
 
-app.get<{ Querystring: { status?: string } }>("/api/quests", async (request) => {
-  return getQuests(request.query.status ?? null);
-});
-
 app.get<{ Querystring: { limit?: string } }>("/api/openclaw/tasks", async (request) => {
   const limit = Number.parseInt(request.query.limit ?? "50", 10);
   return { tasks: readTaskRuns(Number.isFinite(limit) ? limit : 50) };
@@ -51,9 +57,22 @@ app.get<{ Querystring: { limit?: string } }>("/api/openclaw/tasks", async (reque
 
 app.get("/api/openclaw/status", async () => readStatusSummary());
 
+// Route modules
+await registerStateRoutes(app);
+await registerMapRoutes(app);
+await registerBagRoutes(app);
+await registerSiteRoutes(app);
+await registerFeedbackRoutes(app);
+await registerQuestRoutes(app);
+await registerReflectionRoutes(app);
+await registerHubRoutes(app);
+await registerRumorRoutes(app);
+await registerMiscRoutes(app);
+
+// WebSocket — /ws serves the live event stream. Initial snapshot on
+// connect so fresh clients don't wait for the next broadcast.
 app.get("/ws", { websocket: true }, (socket) => {
   manager.connect(socket);
-  // Send current state + recent events snapshot (matches Python behaviour).
   const state = getState();
   if (state) socket.send(JSON.stringify({ type: "state", data: state }));
   const recent = getEvents(20);
@@ -61,13 +80,6 @@ app.get("/ws", { websocket: true }, (socket) => {
     socket.send(JSON.stringify({ type: "event", data: event }));
   }
 });
-
-app.get("/api/health", async () => ({
-  ok: true,
-  port: PORT,
-  backend: "typescript",
-  ws_clients: manager.size(),
-}));
 
 try {
   await app.listen({ host: HOST, port: PORT });
