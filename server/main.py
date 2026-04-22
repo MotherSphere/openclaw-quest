@@ -2413,6 +2413,22 @@ async def update_state_field(body: dict):
     return {"ok": True}
 
 
+# --- OpenClaw bridge (Phase 1b: read-only view of EVE's live data) ---
+
+@app.get("/api/openclaw/tasks")
+async def openclaw_tasks(limit: int = 50):
+    """Read OpenClaw task runs from ~/.openclaw/tasks/runs.sqlite (read-only)."""
+    from openclaw_bridge import read_task_runs
+    return {"tasks": read_task_runs(limit=limit)}
+
+
+@app.get("/api/openclaw/status")
+async def openclaw_status():
+    """Summary of the local OpenClaw instance: agents + task counts by status."""
+    from openclaw_bridge import read_status_summary
+    return read_status_summary()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=HOST, port=PORT)

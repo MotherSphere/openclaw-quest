@@ -104,7 +104,7 @@ export interface BagItem {
 
 export type NpcId = 'guild_master' | 'cartographer' | 'quartermaster' | 'bartender' | 'sage'
 export type NpcMood = 'friendly' | 'serious' | 'excited'
-export type TabId = 'map' | 'guild' | 'shop' | 'npc'
+export type TabId = 'map' | 'guild' | 'shop' | 'npc' | 'eve'
 
 export interface NpcChatRequest {
   npc: NpcId
