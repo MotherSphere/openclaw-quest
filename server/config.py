@@ -43,6 +43,7 @@ AGENT_RUNTIME_HOME = Path(
 AGENT_RUNTIME_SITE_PACKAGES_GLOB = os.environ.get("QUEST_OPENCLAW_SITE_PACKAGES_GLOB", "")
 TWITTER_CLI = os.environ.get("QUEST_TWITTER_CLI") or shutil.which("twitter") or ""
 QUEST_CYCLE_PROMPT = os.environ.get("QUEST_CYCLE_PROMPT", "Run quest evolution cycle")
+QUEST_CYCLE_ENABLED = os.environ.get("QUEST_CYCLE_ENABLED", "0") == "1"
 
 PORT = int(os.environ.get("QUEST_PORT", "8420"))
 HOST = os.environ.get("QUEST_HOST", "0.0.0.0")
