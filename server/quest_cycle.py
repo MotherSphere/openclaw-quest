@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -107,6 +108,12 @@ class QuestCycleRunner:
             self._clear_lock()
 
     def _reflect_and_plan(self) -> CyclePlan:
+        # Map population: on the very first cycle against an empty
+        # knowledge-map, seed 2-3 starter workflows inferred by the LLM from
+        # EVE's recent task labels. Subsequent cycles find workflows already
+        # present and skip this step.
+        self._seed_workflows_if_empty()
+
         workflows = self.map_data.get("workflows", []) if isinstance(self.map_data, dict) else []
         skill_sentiment = self.digest.get("skill_sentiment", {}) if isinstance(self.digest, dict) else {}
         workflow_sentiment = self.digest.get("workflow_sentiment", {}) if isinstance(self.digest, dict) else {}
@@ -426,6 +433,101 @@ class QuestCycleRunner:
                 "quest_completed": quest_title,
             },
         )
+
+    def _seed_workflows_if_empty(self) -> None:
+        """On first cycle with a blank knowledge-map, ask the LLM to name
+        2-3 starter workflow domains based on EVE's recent task_runs labels.
+        Writes knowledge-map.json, emits a region_unlock event per workflow
+        so the chronicle and World Map light up. Fails silently — a blank
+        map is not worse than a blank map."""
+        existing = self.map_data.get("workflows") if isinstance(self.map_data, dict) else None
+        if existing:
+            return
+
+        # Pull recent labels from EVE's own task history so the seed feels
+        # grounded in what she's actually working on.
+        task_labels: list[str] = []
+        try:
+            from openclaw_bridge import read_task_runs
+            for t in read_task_runs(limit=20):
+                label = (t.get("label") or "").strip()
+                if label and label not in task_labels:
+                    task_labels.append(label)
+        except Exception:  # pragma: no cover
+            pass
+        labels_block = "\n".join(f"- {l}" for l in task_labels[:10]) or "(no recent labels)"
+
+        prompt = (
+            "You are drafting the initial atlas of a self-evolving learning agent.\n"
+            "Name 2 or 3 distinct \"workflow domains\" the agent is currently practising, "
+            "based on the recent task labels below. Each MUST be on its own line in this "
+            "EXACT format, nothing else (no preamble, no epilogue, no markdown, no "
+            "bullet points):\n\n"
+            "WORKFLOW: <evocative 2-4 word name> | <category: coding|research|automation|creative> | <one short sentence description>\n\n"
+            "Recent task labels:\n"
+            f"{labels_block}\n"
+        )
+        reply = _call_openclaw_agent(prompt, thinking="off")
+        if not reply:
+            return
+
+        categories = {"coding", "research", "automation", "creative"}
+        positions = [(0.30, 0.30), (0.70, 0.40), (0.50, 0.75), (0.25, 0.65), (0.75, 0.72)]
+        workflows: list[dict[str, Any]] = []
+        now = self._now_iso()
+
+        for raw_line in reply.splitlines():
+            line = raw_line.strip()
+            if not line.lower().startswith("workflow:"):
+                continue
+            body = line.split(":", 1)[1]
+            parts = [p.strip() for p in body.split("|")]
+            if len(parts) < 3:
+                continue
+            name = parts[0][:60]
+            category = parts[1].lower().strip()
+            if category not in categories:
+                category = "research"
+            description = parts[2][:240]
+            wf_id = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or f"workflow-{len(workflows)+1}"
+            pos = positions[len(workflows) % len(positions)]
+            workflows.append({
+                "id": wf_id,
+                "name": name,
+                "description": description,
+                "category": category,
+                "position": {"x": pos[0], "y": pos[1]},
+                "discovered_at": now,
+                "last_active": now,
+                "interaction_count": 1,
+                "correction_count": 0,
+                "mastery": 0.1,
+                "skills_involved": [],
+                "sub_nodes": [],
+            })
+            if len(workflows) >= 3:
+                break
+
+        if not workflows:
+            return
+
+        self.map_data = {
+            "version": 2,
+            "generated_at": now,
+            "workflows": workflows,
+            "connections": [],
+            "fog_regions": [],
+        }
+        self._write_json(MAP_FILE, self.map_data)
+
+        logger.info("seeded %d starter workflows into the atlas", len(workflows))
+        for wf in workflows:
+            self._write_event("region_unlock", {
+                "name": wf["name"],
+                "workflow_id": wf["id"],
+                "category": wf["category"],
+                "reason": wf["description"],
+            })
 
     def _llm_reflect(
         self,
