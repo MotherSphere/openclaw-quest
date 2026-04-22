@@ -1,0 +1,44 @@
+{
+  "_comment": "SpriteCook asset manifest for OpenClaw Quest NPC portraits. Shared style: pixel art 128x128, dark fantasy medieval tavern, anchored on Lyra (guild-master) via reference_asset_id.",
+  "generated_at": "2026-04-22T12:30:00Z",
+  "anchor": "94bbdcb1-8e81-4306-a0ec-48b2b5890784",
+  "model": "gemini-3.1-flash-image-preview",
+  "assets": [
+    {
+      "file": "guild-master.png",
+      "npc_id": "guild_master",
+      "npc_name": "Lyra",
+      "asset_id": "94bbdcb1-8e81-4306-a0ec-48b2b5890784",
+      "sha12": "d1aab8c4d0ed",
+      "role": "style anchor"
+    },
+    {
+      "file": "cartographer.png",
+      "npc_id": "cartographer",
+      "npc_name": "Aldric",
+      "asset_id": "e8b15948-33f5-48b8-a473-d9693194e8ff",
+      "sha12": "2edd83a4b39c"
+    },
+    {
+      "file": "quartermaster.png",
+      "npc_id": "quartermaster",
+      "npc_name": "Kael",
+      "asset_id": "7d6419db-249d-49d8-aa6c-c3b0df3903e7",
+      "sha12": "d31c14c26274"
+    },
+    {
+      "file": "bartender.png",
+      "npc_id": "bartender",
+      "npc_name": "Gus",
+      "asset_id": "7e4b3c33-00da-4e0c-9e38-60dff19503e1",
+      "sha12": "837cb03c1c83"
+    },
+    {
+      "file": "sage.png",
+      "npc_id": "sage",
+      "npc_name": "Orin",
+      "asset_id": "558e2216-be47-4596-a762-3922ab89d6e1",
+      "sha12": "efa009ba63ee"
+    }
+  ]
+}
