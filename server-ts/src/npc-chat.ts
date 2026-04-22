@@ -1,15 +1,16 @@
-/** NPC chat — single-turn replies via `openclaw agent`. Port of
- * server/npc_chat.py. Personas are loaded from
- * server/prompts/npcs/<id>.md with mtime-based hot-reload, rendered with
- * runtime game state, and then routed through call_agent. */
+/** NPC chat — single-turn replies via `openclaw agent`. Port of the
+ * original server/npc_chat.py. Personas are loaded from
+ * server-ts/prompts/npcs/<id>.md with mtime-based hot-reload, rendered
+ * with runtime game state, and then routed through call_agent. */
 
 import { readFileSync, statSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { QUESTS_V2_FILE, EVENTS_FILE } from "./config.ts";
 import { callAgent } from "./openclaw-agent.ts";
 
-const PROMPTS_DIR = join(process.cwd(), "server", "prompts");
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
 const NPC_LLM_TIMEOUT_MS = 60_000;
 
 export const VALID_NPCS = new Set([

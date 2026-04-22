@@ -3,7 +3,8 @@
 
 import { existsSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import {
@@ -15,7 +16,7 @@ import { callAgent } from "../openclaw-agent.ts";
 import { getEvents, getQuests, upsertState } from "../models.ts";
 import { manager } from "../ws-manager.ts";
 
-const PROMPTS_DIR = join(process.cwd(), "server", "prompts");
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts");
 
 export async function registerReflectionRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/reflection/latest", async () => {
