@@ -1,0 +1,239 @@
+/** /api/quests + /api/quest/* — quest CRUD.
+ *
+ * Quests live in both quests.json (frontend-friendly shape, watcher
+ * broadcasts on mtime change) and the SQLite `quests` table (legacy DB
+ * surface — the watcher mirrors quest_accept/complete/fail events into
+ * it). This module reads/writes both when they disagree. */
+
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import type { FastifyInstance } from "fastify";
+
+import { GAME_BALANCE, QUESTS_V2_FILE } from "../config.ts";
+import { manager } from "../ws-manager.ts";
+import { getQuests } from "../models.ts";
+
+interface Quest {
+  id: string;
+  title: string;
+  description?: string;
+  rank?: string;
+  status?: string;
+  workflow_id?: string | null;
+  reward_xp?: number;
+  reward_gold?: number;
+  created_at?: string;
+  completed_at?: string | null;
+  source?: string;
+}
+
+async function readQuestsJson(): Promise<Quest[]> {
+  if (!existsSync(QUESTS_V2_FILE)) return [];
+  try {
+    const raw = await readFile(QUESTS_V2_FILE, "utf8");
+    return JSON.parse(raw) as Quest[];
+  } catch {
+    return [];
+  }
+}
+
+async function writeQuestsJson(quests: Quest[]): Promise<void> {
+  await writeFile(QUESTS_V2_FILE, JSON.stringify(quests, null, 2));
+}
+
+function rewardsFor(rank: string): { xp: number; gold: number } {
+  const key = `reward_${rank}` as const;
+  const preset = (GAME_BALANCE as Record<string, unknown>)[key] as
+    | { xp_base?: number; gold_base?: number }
+    | undefined;
+  return {
+    xp: preset?.xp_base ?? GAME_BALANCE.default_reward_xp,
+    gold: preset?.gold_base ?? GAME_BALANCE.default_reward_gold,
+  };
+}
+
+export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Querystring: { status?: string } }>("/api/quests", async (request) => {
+    const quests = await readQuestsJson();
+    if (request.query.status) {
+      return quests.filter((q) => q.status === request.query.status);
+    }
+    return quests;
+  });
+
+  app.get("/api/quest/active", async () => {
+    const quests = await readQuestsJson();
+    const active = quests.filter(
+      (q) => q.status === "active" || q.status === "in_progress" || q.status === "pending",
+    );
+    const completed = quests.filter((q) => q.status === "completed");
+    return { quests: active, completed_count: completed.length };
+  });
+
+  app.post<{
+    Body: { title?: string; description?: string; rank?: string; workflow_id?: string };
+  }>("/api/quest/create", async (request, reply) => {
+    const body = request.body ?? {};
+    const title = (body.title ?? "").trim();
+    if (!title || title.length > 80) {
+      return reply.code(400).send({ error: "title required (1-80 chars)" });
+    }
+    const rank = (body.rank ?? "C").toUpperCase();
+    if (!["A", "B", "C"].includes(rank)) {
+      return reply.code(400).send({ error: "rank must be A|B|C" });
+    }
+    const rewards = rewardsFor(rank);
+    const quests = await readQuestsJson();
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "quest";
+    const quest: Quest = {
+      id: `${slug}-${Math.floor(Date.now() / 1000)}`,
+      title,
+      description: body.description ?? "",
+      rank,
+      status: "active",
+      workflow_id: body.workflow_id ?? null,
+      reward_xp: rewards.xp,
+      reward_gold: rewards.gold,
+      created_at: new Date().toISOString(),
+      source: "user",
+    };
+    quests.push(quest);
+    await writeQuestsJson(quests);
+    manager.broadcast({
+      type: "quest",
+      data: {
+        quests: quests.filter(
+          (q) => q.status === "active" || q.status === "in_progress" || q.status === "pending",
+        ),
+      },
+    });
+    return { ok: true, quest };
+  });
+
+  app.post<{ Body: { quest_id?: string; title?: string; description?: string; rank?: string } }>(
+    "/api/quest/edit",
+    async (request, reply) => {
+      const body = request.body ?? {};
+      const questId = body.quest_id;
+      if (!questId) return reply.code(400).send({ error: "quest_id required" });
+      const quests = await readQuestsJson();
+      const q = quests.find((x) => x.id === questId);
+      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      if (body.title !== undefined) q.title = body.title.slice(0, 80);
+      if (body.description !== undefined) q.description = body.description.slice(0, 240);
+      if (body.rank && ["A", "B", "C"].includes(body.rank.toUpperCase())) {
+        q.rank = body.rank.toUpperCase();
+      }
+      await writeQuestsJson(quests);
+      manager.broadcast({
+        type: "quest",
+        data: {
+          quests: quests.filter(
+            (qq) => qq.status === "active" || qq.status === "in_progress" || qq.status === "pending",
+          ),
+        },
+      });
+      return { ok: true, quest: q };
+    },
+  );
+
+  app.post<{ Body: { quest_id?: string } }>(
+    "/api/quest/cancel",
+    async (request, reply) => {
+      const questId = request.body?.quest_id;
+      if (!questId) return reply.code(400).send({ error: "quest_id required" });
+      const quests = await readQuestsJson();
+      const remaining = quests.filter((q) => q.id !== questId);
+      if (remaining.length === quests.length) {
+        return reply.code(404).send({ error: "quest_not_found" });
+      }
+      await writeQuestsJson(remaining);
+      manager.broadcast({
+        type: "quest",
+        data: {
+          quests: remaining.filter(
+            (q) => q.status === "active" || q.status === "in_progress" || q.status === "pending",
+          ),
+        },
+      });
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Body: { quest_id?: string } }>(
+    "/api/quest/accept",
+    async (request, reply) => {
+      const questId = request.body?.quest_id;
+      if (!questId) return reply.code(400).send({ error: "quest_id required" });
+      const quests = await readQuestsJson();
+      const q = quests.find((x) => x.id === questId);
+      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      if (q.status !== "pending" && q.status !== "active") {
+        return reply.code(400).send({ error: "quest not available" });
+      }
+      q.status = "active";
+      await writeQuestsJson(quests);
+      manager.broadcast({
+        type: "quest",
+        data: {
+          quests: quests.filter(
+            (qq) => qq.status === "active" || qq.status === "in_progress" || qq.status === "pending",
+          ),
+        },
+      });
+      return { ok: true, quest: q };
+    },
+  );
+
+  app.post<{ Body: { quest_id?: string } }>(
+    "/api/quest/fail",
+    async (request, reply) => {
+      const questId = request.body?.quest_id;
+      if (!questId) return reply.code(400).send({ error: "quest_id required" });
+      const quests = await readQuestsJson();
+      const q = quests.find((x) => x.id === questId);
+      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      q.status = "failed";
+      q.completed_at = new Date().toISOString();
+      await writeQuestsJson(quests);
+      manager.broadcast({
+        type: "quest",
+        data: {
+          quests: quests.filter(
+            (qq) => qq.status === "active" || qq.status === "in_progress" || qq.status === "pending",
+          ),
+        },
+      });
+      return { ok: true, quest: q };
+    },
+  );
+
+  app.post<{ Body: { quest_id?: string } }>(
+    "/api/quest/complete",
+    async (request, reply) => {
+      const questId = request.body?.quest_id;
+      if (!questId) return reply.code(400).send({ error: "quest_id required" });
+      const quests = await readQuestsJson();
+      const q = quests.find((x) => x.id === questId);
+      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      q.status = "completed";
+      q.completed_at = new Date().toISOString();
+      await writeQuestsJson(quests);
+      manager.broadcast({
+        type: "quest",
+        data: {
+          quests: quests.filter(
+            (qq) => qq.status === "active" || qq.status === "in_progress" || qq.status === "pending",
+          ),
+        },
+      });
+      return { ok: true, quest: q };
+    },
+  );
+
+  // Kept for legacy DB read
+  app.get<{ Querystring: { status?: string } }>(
+    "/api/quests/db",
+    async (request) => getQuests(request.query.status ?? null),
+  );
+}
