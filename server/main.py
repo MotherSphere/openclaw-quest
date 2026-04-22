@@ -24,8 +24,6 @@ from config import (
     FEEDBACK_DIGEST_FILE,
     GAME_BALANCE,
     AGENT_RUNTIME_BIN,
-    AGENT_RUNTIME_HOME,
-    AGENT_RUNTIME_SITE_PACKAGES_GLOB,
     OPENCLAW_HOME,
     HOST,
     HUB_RECOMMENDATIONS_FILE,
@@ -44,7 +42,6 @@ from config import (
     SKILLS_DIR,
     STATE_FILE,
     TAVERN_CACHE_FILE,
-    TWITTER_CLI,
 )
 from models import (
     init_db,
@@ -424,49 +421,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 watcher = QuestWatcher()
-
-
-def _ensure_agent_runtime_paths():
-    import glob as _glob
-
-    if str(AGENT_RUNTIME_HOME) not in sys.path:
-        sys.path.insert(0, str(AGENT_RUNTIME_HOME))
-
-    if AGENT_RUNTIME_SITE_PACKAGES_GLOB:
-        for site_packages in _glob.glob(AGENT_RUNTIME_SITE_PACKAGES_GLOB):
-            if site_packages not in sys.path:
-                sys.path.insert(0, site_packages)
-
-
-def _load_hub_module():
-    import importlib.util
-
-    guard_path = AGENT_RUNTIME_HOME / "tools" / "skills_guard.py"
-    hub_path = AGENT_RUNTIME_HOME / "tools" / "skills_hub.py"
-    if not AGENT_RUNTIME_HOME.exists() or not guard_path.exists() or not hub_path.exists():
-        return None
-
-    _ensure_agent_runtime_paths()
-
-    def _load_module(module_name: str, path: Path):
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise FileNotFoundError(path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    _load_module("tools.skills_guard", guard_path)
-    return _load_module("tools.skills_hub", hub_path)
-
-
-def _create_hub_sources():
-    hub_mod = _load_hub_module()
-    if hub_mod is None:
-        return None
-    auth = hub_mod.GitHubAuth()
-    return hub_mod.create_source_router(auth)
 
 
 @asynccontextmanager
@@ -1131,11 +1085,12 @@ async def get_bag_items():
         for f in sorted(COMPLETIONS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if f.suffix == ".md":
                 try:
+                    raw = f.read_text() if f.stat().st_size > 0 else ""
                     items.append({
                         "id": f"completion-{f.stem}",
                         "type": "research_note",
-                        "name": f.stem.replace("-", " ").title(),
-                        "description": f.read_text()[:200] if f.stat().st_size > 0 else "",
+                        "name": _completion_display_name(raw, f.stem),
+                        "description": _completion_preview(raw),
                         "source_quest": None,
                         "created_at": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
                         "file_path": str(f),
@@ -1145,6 +1100,41 @@ async def get_bag_items():
                 except OSError:
                     pass
     return {"items": items[:50]}
+
+
+def _completion_display_name(raw: str, fallback_stem: str) -> str:
+    """Pull the title out of the markdown's `# H1` if present, otherwise
+    prettify the filename stem. Avoids the ugly slug-with-timestamp showing
+    up verbatim in the INVENTORY card title."""
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line[2:].strip()[:80] or fallback_stem.replace("-", " ").title()
+    return fallback_stem.replace("-", " ").title()
+
+
+def _completion_preview(raw: str) -> str:
+    """Return the first meaningful paragraph under the ## Brief heading,
+    or fall back to the first non-metadata prose line. Keeps the bag card
+    readable instead of dumping raw markdown + frontmatter stats."""
+    if not raw:
+        return ""
+    lines = [l.rstrip() for l in raw.splitlines()]
+    # Prefer content under "## Brief"
+    try:
+        idx = next(i for i, l in enumerate(lines) if l.strip().lower() == "## brief")
+        for l in lines[idx + 1:]:
+            stripped = l.strip()
+            if stripped and not stripped.startswith("#"):
+                return stripped[:200]
+    except StopIteration:
+        pass
+    # Fallback: first prose line that isn't a heading or metadata bullet
+    for l in lines:
+        s = l.strip()
+        if s and not s.startswith("#") and not s.startswith("- ") and not s.startswith("*"):
+            return s[:200]
+    return ""
 
 
 @app.post("/api/npc/chat")

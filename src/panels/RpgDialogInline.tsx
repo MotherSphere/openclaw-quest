@@ -8,11 +8,12 @@ import BackButton from '../components/BackButton'
 import RpgButton from '../components/RpgButton'
 
 /** RPG dialog inline — replaces NPC bar in the bottom area */
-export default function RpgDialogInline({ npc, onClose, chatHistoryRef, prefillMessage }: {
+export default function RpgDialogInline({ npc, onClose, chatHistoryRef, prefillMessage, onPrefillConsumed }: {
   npc: NpcData
   onClose: () => void
   chatHistoryRef: React.MutableRefObject<Record<string, Array<{ role: 'npc' | 'user'; text: string }>>>
   prefillMessage?: string | null
+  onPrefillConsumed?: () => void
 }) {
   const existing = chatHistoryRef.current[npc.id]
   const [messages, setMessages] = useState<Array<{ role: 'npc' | 'user'; text: string }>>(
@@ -46,11 +47,16 @@ export default function RpgDialogInline({ npc, onClose, chatHistoryRef, prefillM
     })
   }, [messages, loading])
 
-  // Handle prefill message from bag "SHOW TO NPC"
+  // Handle prefill message from bag "SHOW TO NPC".
+  // The useRef guard is not enough on its own — if the user tab-switches away
+  // and back, this component unmounts + remounts with a fresh ref, which
+  // would re-fire the prefill. The onPrefillConsumed callback lets the
+  // parent null out its prefill state as soon as we've taken it, so later
+  // remounts see prefillMessage=null and skip the send.
   useEffect(() => {
     if (prefillMessage && !prefillHandled.current) {
       prefillHandled.current = true
-      // Slight delay to ensure component is fully mounted with messages
+      onPrefillConsumed?.()
       setTimeout(() => handleSend(prefillMessage), 100)
     }
   }, [prefillMessage]) // eslint-disable-line react-hooks/exhaustive-deps
