@@ -10,6 +10,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 
 import { HOST, PORT, STATE_FILE } from "./config.ts";
+import { readStatusSummary, readTaskRuns } from "./openclaw-bridge.ts";
 
 const app = Fastify({ logger: { level: "info" } });
 
@@ -27,6 +28,13 @@ app.get("/api/state", async (_request, reply) => {
     return reply.code(500).send({ error: "state_read_failed" });
   }
 });
+
+app.get<{ Querystring: { limit?: string } }>("/api/openclaw/tasks", async (request) => {
+  const limit = Number.parseInt(request.query.limit ?? "50", 10);
+  return { tasks: readTaskRuns(Number.isFinite(limit) ? limit : 50) };
+});
+
+app.get("/api/openclaw/status", async () => readStatusSummary());
 
 app.get("/api/health", async () => ({ ok: true, port: PORT, backend: "typescript" }));
 
