@@ -193,6 +193,11 @@ class QuestCycleRunner:
             target_quest = next((q for q in active_quests if q.get("workflow_id") == workflow_id), None)
         if target_quest is None and active_quests:
             target_quest = active_quests[0]
+        # If the guild board is empty or nothing matches the chosen workflow,
+        # ask the LLM to draft one now so the GUILD tab stops being empty and
+        # the cycle has something concrete to complete.
+        if target_quest is None and isinstance(workflow, dict) and workflow_name:
+            target_quest = self._propose_quest(workflow, target_skill)
 
         reasons = []
         if corrections:
@@ -304,9 +309,17 @@ class QuestCycleRunner:
         self._update_state()
 
     def _award_training_skill(self) -> None:
-        if not self.plan or not self.plan.target_skill:
+        if not self.plan:
             return
-        skill_name = self.plan.target_skill
+        # Prefer a specific sub-skill (sub_node name) when PLAN picked one;
+        # fall back to the workflow name itself so the SKILLS panel still
+        # accumulates something meaningful when workflows are seeded without
+        # sub_nodes yet. Persistence is handled downstream: server/watcher.py
+        # listens for skill_drop events in events.jsonl and upserts them via
+        # models.upsert_skill with source="training".
+        skill_name = self.plan.target_skill or self.plan.workflow_name
+        if not skill_name:
+            return
         self.skills_gained.append(skill_name)
         self.outcomes.append(f"Improved {skill_name}")
         self._write_event(
@@ -528,6 +541,73 @@ class QuestCycleRunner:
                 "category": wf["category"],
                 "reason": wf["description"],
             })
+
+    def _propose_quest(self, workflow: dict, target_skill: str | None) -> dict | None:
+        """Ask the LLM to draft one concrete quest targeting the chosen
+        workflow. Appends it to quests.json (the watcher broadcasts the
+        refresh via WS) and emits a `quest_create` event. Returns the dict
+        or None on any failure."""
+        wf_name = workflow.get("name") or ""
+        wf_desc = workflow.get("description") or ""
+        skill_hint = target_skill or "open (any skill in this workflow)"
+
+        prompt = (
+            "You are the guild board clerk writing a new quest posting for a self-evolving "
+            f"learning agent currently practising the workflow \"{wf_name}\" — {wf_desc}. "
+            f"Suggested training focus: {skill_hint}.\n\n"
+            "Output EXACTLY ONE line in this format, nothing else (no preamble, no epilogue, "
+            "no markdown, no bullet points):\n\n"
+            "QUEST: <concrete imperative title, 3 to 8 words> | <rank: A|B|C> | <one short sentence describing the task>\n"
+        )
+        reply = _call_openclaw_agent(prompt, thinking="off")
+        if not reply:
+            return None
+
+        for raw in reply.splitlines():
+            line = raw.strip()
+            if not line.lower().startswith("quest:"):
+                continue
+            body = line.split(":", 1)[1]
+            parts = [p.strip() for p in body.split("|")]
+            if len(parts) < 3:
+                continue
+            title = parts[0][:80]
+            rank = parts[1].upper().strip()
+            if rank not in ("A", "B", "C"):
+                rank = "C"
+            description = parts[2][:240]
+
+            rewards = GAME_BALANCE.get(f"reward_{rank}", {}) or {}
+            reward_xp = int(rewards.get("xp_base", GAME_BALANCE["default_reward_xp"]))
+            reward_gold = int(rewards.get("gold_base", GAME_BALANCE["default_reward_gold"]))
+
+            slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "quest"
+            quest = {
+                "id": f"{slug}-{int(time.time())}",
+                "title": title,
+                "description": description,
+                "rank": rank,
+                "status": "active",
+                "workflow_id": workflow.get("id"),
+                "reward_xp": reward_xp,
+                "reward_gold": reward_gold,
+                "created_at": self._now_iso(),
+                "source": "cycle-proposed",
+            }
+            self.quests.append(quest)
+            self._write_json(QUESTS_V2_FILE, self.quests)
+            self._write_event("quest_create", {
+                "quest_id": quest["id"],
+                "title": quest["title"],
+                "rank": quest["rank"],
+                "workflow_id": quest.get("workflow_id"),
+                "reward_xp": reward_xp,
+                "reward_gold": reward_gold,
+                "source": "cycle-proposed",
+            })
+            logger.info("proposed quest %s (rank %s) for workflow %s", quest["id"], rank, wf_name)
+            return quest
+        return None
 
     def _llm_reflect(
         self,
