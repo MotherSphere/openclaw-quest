@@ -260,9 +260,12 @@ async def chat_with_npc(npc_id, message, context, game_state=None, history=None)
     )
 
     # Run the agent call on a worker thread so we don't block the FastAPI
-    # event loop for the 5-30s the LLM takes.
+    # event loop for the 5-30s the LLM takes. thinking="off" keeps NPC chat
+    # snappy — a bartender doesn't need chain-of-thought for a greeting.
     logger.info("NPC %s: calling openclaw agent (prompt %d chars)", npc_id, len(final_prompt))
-    reply = await asyncio.to_thread(call_agent, final_prompt, timeout=NPC_LLM_TIMEOUT)
+    reply = await asyncio.to_thread(
+        call_agent, final_prompt, timeout=NPC_LLM_TIMEOUT, thinking="off"
+    )
     logger.info("NPC %s: agent returned %s", npc_id, f"{len(reply)} chars" if reply else "None")
     if not reply:
         logger.warning("NPC %s: agent call returned no reply", npc_id)
