@@ -1,0 +1,60 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+__pycache__
+*.pyc
+
+# Environment
+.env
+.env.local
+.env.*.local
+.venv*/
+output/
+
+# Credentials
+*.pem
+
+# Internal docs & superpowers
+docs/superpowers/
+.superpowers/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# AI-generated assets (persist locally, don't commit to git)
+public/bg/*.png
+public/npc/*.png
+public/sprites/*.png
+public/icons/*.png
+public/bg/backup-v1/
+public/bg/originals/
+public/sprites/originals/
+public/npc/sprites/
+public/items/raw/
+public/skills/raw/
+*.jiuguan.png
+
+# Internal / tooling (not part of the product)
+demo/
+scripts/
+REVIEW-LOG.md
+PROJECT-CONTEXT.md
+docs/
