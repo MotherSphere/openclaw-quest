@@ -83,20 +83,19 @@ openclaw plugins install openclaw-quest --dangerously-force-unsafe-install
 
 # During development, link a local clone:
 git clone https://github.com/MotherSphere/openclaw-quest.git
-cd openclaw-quest/server-ts && bun install
+cd openclaw-quest
+npm install && npm run build                      # builds into server-ts/dist-frontend
+cd server-ts && bun install
 openclaw plugins install . --link --dangerously-force-unsafe-install
 ```
 
 OpenClaw's installer scans plugin code for `child_process` and similar patterns and blocks them by default; Quest needs it to spawn `openclaw agent` and the `bun` backend, so pass `--dangerously-force-unsafe-install` once you've reviewed the code.
 
-With `autoStart: true` (the default), OpenClaw will launch `bun src/main.ts` as a managed service whenever the gateway boots. Then:
+With `autoStart: true` (the default), OpenClaw launches `bun src/main.ts` as a managed service whenever the gateway boots and the backend serves the built dashboard directly from `:8420` — no second terminal needed:
 
 ```bash
-# In a second terminal (frontend dev server):
-cd openclaw-quest && npm install && npm run dev   # :5173
-
-# Anywhere:
-openclaw quest                                    # opens the dashboard
+openclaw gateway restart   # pick up the newly-linked plugin
+openclaw quest             # opens the dashboard in your browser
 ```
 
 Plugin config lives in `~/.openclaw/openclaw.json` under `plugins.entries.openclaw-quest.config` — see `server-ts/openclaw.plugin.json` for the full schema (port, host, cycleEnabled, cycleAgentId, cycleThinking, cycleLlmTimeoutSec, autoStart, bunBin).
@@ -149,10 +148,10 @@ All env vars optional. Defaults shown.
 - ✅ **Phase 8** — dead-code cleanup, research notes drop into INVENTORY on quest completion, "SHOW TO NPC" no longer re-fires on tab switch
 - ✅ **Phase 9** — full backend rewrite from Python/FastAPI to TypeScript/Bun/Fastify. Same 43 endpoints, same WS broadcasts, same cycle/NPC behaviour — now running on OpenClaw's own runtime in preparation for shipping as a native plugin
 - ✅ **Phase 10** — packaged as a native OpenClaw plugin (`openclaw-quest`): `openclaw.plugin.json` manifest, `plugin-entry.ts` that registers the `openclaw quest` CLI command plus an auto-starting backend service, config exposed under `plugins.entries.openclaw-quest.config`
+- ✅ **Phase 11** — bundled the Vite frontend inside the plugin (`@fastify/static` + SPA fallback): `npm run build` now outputs into `server-ts/dist-frontend/`, the backend serves it from `:8420` when present, `npm run dev` on `:5173` still works for local frontend development
 
 ## Roadmap (next)
 
-- Bundle a built frontend inside the plugin so `openclaw plugins install openclaw-quest` delivers a complete dashboard (no separate `npm run dev` step)
 - Upstream proposal for `api.registerTab(...)` so the dashboard can embed directly inside the OpenClaw control UI instead of opening a separate browser tab
 - Click-to-upload avatar for the character portrait and NPC sprites
 - Elapsed timer in the "thinking..." indicator
