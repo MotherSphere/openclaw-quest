@@ -1549,7 +1549,7 @@ async def user_feedback(body: dict):
     await manager.broadcast({"type": "state", "data": state})
     await manager.broadcast({"type": "event", "data": event})
 
-    return {"status": "ok", "hp": state["hp"], "mp": state["mp"], "digest_updated": True}
+    return {"status": "ok", "hp": state.get("hp", 0), "mp": state.get("mp", 0), "digest_updated": True}
 
 
 @app.get("/api/feedback/digest")

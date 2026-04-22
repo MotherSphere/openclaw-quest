@@ -187,9 +187,11 @@ class QuestCycleRunner:
         }
 
         # Heuristic from quest-skill: repeated recent feedback can escalate avoidance.
+        # recent_feedback is stored newest-first by update_feedback_digest; look
+        # at the 3 most recent items, not the oldest.
         if len(recent_feedback) >= 3:
-            last_three = recent_feedback[-3:]
-            same_skill = {item.get("skill") for item in last_three if item.get("skill")}
+            latest_three = recent_feedback[:3]
+            same_skill = {item.get("skill") for item in latest_three if item.get("skill")}
             if len(same_skill) == 1:
                 avoided_skills.extend(list(same_skill))
 
@@ -277,6 +279,11 @@ class QuestCycleRunner:
 
         self._reflect_summary_text = reflect_summary  # stored for REPORT context
 
+        # feedback_influenced: the reflect was produced by an LLM call that
+        # saw at least one feedback entry in its prompt. AdventureLog.tsx
+        # already looks for this flag to mark influenced cycles with a purple
+        # side-bar.
+        feedback_influenced = llm_used and feedback_items > 0
         self._write_event(
             "reflect",
             {
@@ -285,6 +292,7 @@ class QuestCycleRunner:
                 "summary": reflect_summary,
                 "feedback_items": feedback_items,
                 "llm": llm_used,
+                "feedback_influenced": feedback_influenced,
             },
         )
         self._write_event(
@@ -402,13 +410,27 @@ class QuestCycleRunner:
         self.state["gold"] = int(self.state.get("gold", 0) or 0) + reward_gold
 
     def _update_state(self) -> None:
+        # Baseline fields that the rest of the app (feedback endpoint, UI,
+        # level-up math) reads without defensive .get() everywhere. Fill them
+        # only if missing — a fresh state.json or one created by an older
+        # cycle version would otherwise crash POST /api/feedback on
+        # state["hp"] lookup.
+        self.state.setdefault("name", "EVE")
+        self.state.setdefault("level", 1)
+        self.state.setdefault("class", "adventurer")
+        self.state.setdefault("title", "Novice")
+        self.state.setdefault("hp_max", GAME_BALANCE["hp_base"] + int(self.state.get("level", 1)) * GAME_BALANCE["hp_per_level"])
+        self.state.setdefault("hp", int(self.state.get("hp_max", GAME_BALANCE["hp_base"])))
+        self.state.setdefault("mp_max", GAME_BALANCE["mp_max"])
+        self.state.setdefault("mp", 50)
+        self.state.setdefault("xp", 0)
+        self.state.setdefault("xp_to_next", max(100, int(self.state.get("level", 1) or 1) * GAME_BALANCE["xp_per_level"]))
+
         xp_bonus = 25 if self.skills_gained else 10
         self.state["xp"] = int(self.state.get("xp", 0) or 0) + xp_bonus
         self.state["total_cycles"] = int(self.state.get("total_cycles", 0) or 0) + 1
         self.state["last_cycle_at"] = self._now_iso()
         self.state["last_interaction_at"] = self._now_iso()
-        self.state.setdefault("xp_to_next", max(100, int(self.state.get("level", 1) or 1) * GAME_BALANCE["xp_per_level"]))
-        self.state.setdefault("mp_max", GAME_BALANCE["mp_max"])
         self.state["mp"] = min(int(self.state.get("mp", 50) or 50) + 2, int(self.state.get("mp_max", GAME_BALANCE["mp_max"]) or GAME_BALANCE["mp_max"]))
 
         leveled_up = False
@@ -473,19 +495,26 @@ class QuestCycleRunner:
         corrections: list[dict[str, Any]],
     ) -> str | None:
         fb_lines = []
-        for item in recent_feedback[-5:]:
+        # Digest entries are written by main.update_feedback_digest with shape:
+        # {ts, event_type, event_summary, feedback: "up"|"down", quest_context, skill}
+        for item in recent_feedback[:5]:  # already ordered newest-first by the writer
             if not isinstance(item, dict):
                 continue
-            sentiment = item.get("sentiment") or item.get("type") or "?"
-            subject = item.get("skill") or item.get("workflow") or item.get("target") or "?"
-            reason = (item.get("reason") or "").strip()
-            fb_lines.append(f"- {sentiment} on {subject}" + (f": {reason}" if reason else ""))
+            verdict = item.get("feedback") or item.get("sentiment") or item.get("type") or "?"
+            subject = item.get("skill") or item.get("workflow") or item.get("quest_context") or item.get("event_type") or "?"
+            reason = (item.get("event_summary") or item.get("reason") or "").strip()
+            fb_lines.append(f"- {verdict} on {subject}" + (f": {reason}" if reason else ""))
+        # main.update_feedback_digest writes corrections as plain strings,
+        # but tolerate the older dict shape just in case.
         corr_lines = []
         for item in corrections[-3:]:
-            if isinstance(item, dict):
+            text = ""
+            if isinstance(item, str):
+                text = item.strip()
+            elif isinstance(item, dict):
                 text = (item.get("text") or item.get("reason") or item.get("detail") or "").strip()
-                if text:
-                    corr_lines.append(f"- {text}")
+            if text:
+                corr_lines.append(f"- {text}")
         fb_block = "\n".join(fb_lines) if fb_lines else "(none)"
         corr_block = "\n".join(corr_lines) if corr_lines else "(none)"
 
