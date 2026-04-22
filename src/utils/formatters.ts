@@ -3,11 +3,11 @@ import type { GameEvent } from '../store'
 const EVENT_CONFIG: Record<string, { color: string; format: (data: Record<string, unknown>) => string }> = {
   cycle_start: {
     color: 'var(--cyan)',
-    format: (d) => `Hermes begins a new evolution cycle${d.trigger ? ` [${d.trigger}]` : ''}...`,
+    format: (d) => `EVE begins a new evolution cycle${d.trigger ? ` [${d.trigger}]` : ''}...`,
   },
   reflect: {
     color: 'var(--purple)',
-    format: (d) => `Hermes meditates on weakness: ${(d.chosen_training_target as string) || (d.chosen as string) || (d.weaknesses ? (d.weaknesses as string[])[0] : '') || 'unknown'}...`,
+    format: (d) => `EVE meditates on weakness: ${(d.chosen_training_target as string) || (d.chosen as string) || (d.weaknesses ? (d.weaknesses as string[])[0] : '') || 'unknown'}...`,
   },
   train_start: {
     color: 'var(--gold)',
@@ -27,7 +27,7 @@ const EVENT_CONFIG: Record<string, { color: string; format: (data: Record<string
   },
   level_up: {
     color: 'var(--gold)',
-    format: (d) => `LEVEL UP! Hermes is now Lv.${(d.level as number) ?? (d.to as number) ?? (d.new_level as number) ?? '?'} (${(d.title as string) || (d.new_title as string) || 'Hero'})`,
+    format: (d) => `LEVEL UP! EVE is now Lv.${(d.level as number) ?? (d.to as number) ?? (d.new_level as number) ?? '?'} (${(d.title as string) || (d.new_title as string) || 'Hero'})`,
   },
   boss_fight: {
     color: 'var(--red)',
@@ -127,7 +127,7 @@ const EVENT_CONFIG: Record<string, { color: string; format: (data: Record<string
   },
   reflection_letter: {
     color: 'var(--purple)',
-    format: () => `Hermes has written a reflection letter...`,
+    format: () => `EVE has written a reflection letter...`,
   },
   mp_change: {
     color: 'var(--cyan)',

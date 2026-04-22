@@ -1,13 +1,13 @@
-"""LLM-based skill classification for Hermes Quest sites."""
+"""LLM-based skill classification for OpenClaw Quest sites."""
 import asyncio
 import json
 import logging
 import sys
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from config import MAP_FILE, STATE_FILE, AGENT_RUNTIME_HOME
 
-MAP_FILE = Path.home() / ".hermes" / "quest" / "knowledge-map.json"
+logger = logging.getLogger(__name__)
 
 # Lock to prevent concurrent reclassifications from stomping each other
 _classify_lock = asyncio.Lock()
@@ -15,6 +15,9 @@ _classify_lock = asyncio.Lock()
 
 def _get_classify_client():
     """Get OpenAI client for classification, avoiding jiter version conflicts."""
+    # Phase 1a: credential resolution still goes through the legacy hermes_cli
+    # auth module path. Phase 2 will swap this for an OpenClaw-native auth
+    # bridge (likely reading ~/.openclaw/credentials/ directly).
     agent_paths = [p for p in sys.path if "hermes-agent" in p and "site-packages" in p]
     for p in agent_paths:
         sys.path.remove(p)
@@ -24,11 +27,11 @@ def _get_classify_client():
         sys.modules.pop(k)
 
     try:
-        agent_dir = str(Path.home() / ".hermes" / "hermes-agent")
+        agent_dir = str(AGENT_RUNTIME_HOME)
         if agent_dir not in sys.path:
             sys.path.insert(0, agent_dir)
 
-        from hermes_cli.auth import resolve_codex_runtime_credentials
+        from hermes_cli.auth import resolve_codex_runtime_credentials  # noqa: F401 — legacy path, Phase 2 will replace
         creds = resolve_codex_runtime_credentials()
         base_url = creds.get("base_url", "").rstrip("/")
         api_key = creds.get("api_key", "")
@@ -275,9 +278,8 @@ async def reclassify_skills_after_site_change(sites: list, model: str, broadcast
             if broadcast_fn:
                 try:
                     await broadcast_fn({"type": "classify_status", "status": "completed", "count": len(skills)})
-                    state_path = Path.home() / ".hermes" / "quest" / "state.json"
-                    if state_path.exists():
-                        state = json.loads(state_path.read_text())
+                    if STATE_FILE.exists():
+                        state = json.loads(STATE_FILE.read_text())
                         await broadcast_fn({"type": "state", "data": state})
                 except: pass
             if broadcast_fn:

@@ -368,7 +368,7 @@ export default function KnowledgeMap({ onContinentSelect }: { onContinentSelect?
             fontSize: '11px', color: '#7a5a3a',
             textAlign: 'center', maxWidth: '300px',
           }}>
-            Begin your journey. Complete a Hermes cycle to discover your first continent.
+            Begin your journey. Complete a cycle to discover your first continent.
           </div>
         </div>
       )}

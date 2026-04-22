@@ -99,7 +99,7 @@ class QuestWatcher:
                 pass
 
     async def _sync_filesystem_skills(self):
-        """Scan ~/.hermes/skills/ for SKILL.md files and upsert into DB."""
+        """Scan ~/.openclaw/skills/ for SKILL.md files and upsert into DB."""
         if not SKILLS_DIR.exists():
             logger.info("Skills directory not found: %s", SKILLS_DIR)
             return

@@ -140,7 +140,7 @@ export default function ReflectionLetter() {
           marginBottom: '4px',
           textShadow: '0 1px 0 rgba(255, 255, 255, 0.3)',
         }}>
-          A Letter from Hermes
+          A Letter from EVE
         </div>
 
         {/* Decorative divider */}

@@ -7,12 +7,12 @@ export default function TopBar() {
     <div className="pixel-panel" style={{ padding: '8px 16px', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <span style={{ fontFamily: 'var(--font-pixel)', fontSize: '10px', color: 'var(--gold)', letterSpacing: '2px' }}>
-          HERMES QUEST
+          OPENCLAW QUEST
         </span>
         <span style={{ fontFamily: 'var(--font-pixel)', fontSize: '5px', letterSpacing: '1px', marginTop: '2px' }}>
           <span style={{ color: 'var(--text-dim)' }}>Built on </span>
-          <span style={{ color: '#5271FF' }}>Nous Research</span>
-          <span style={{ color: 'var(--text-dim)' }}> Hermes Agent</span>
+          <span style={{ color: '#c97d3a' }}>OpenClaw</span>
+          <span style={{ color: 'var(--text-dim)' }}> — forked from Hermes Quest</span>
         </span>
       </div>
       <span style={{

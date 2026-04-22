@@ -1,10 +1,10 @@
-"""Paths and constants for Hermes Quest backend."""
+"""Paths and constants for OpenClaw Quest backend."""
 from pathlib import Path
 import os
 import shutil
 
-HERMES_HOME = Path.home() / ".hermes"
-QUEST_DIR = HERMES_HOME / "quest"
+OPENCLAW_HOME = Path.home() / ".openclaw"
+QUEST_DIR = OPENCLAW_HOME / "quest"
 EVENTS_FILE = QUEST_DIR / "events.jsonl"
 STATE_FILE = QUEST_DIR / "state.json"
 MAP_FILE = QUEST_DIR / "knowledge-map.json"
@@ -20,16 +20,27 @@ REFLECTION_LETTER_FILE = QUEST_DIR / "reflection-letter.md"
 TAVERN_CACHE_FILE = QUEST_DIR / "tavern-ambient.json"
 SITES_FILE = QUEST_DIR / "sites.json"
 FEEDBACK_DIGEST_FILE = QUEST_DIR / "feedback-digest.json"
-QUEST_SKILL_DIR = HERMES_HOME / "skills" / "quest"
-SKILLS_DIR = HERMES_HOME / "skills"
+QUEST_SKILL_DIR = OPENCLAW_HOME / "skills" / "quest"
+SKILLS_DIR = OPENCLAW_HOME / "skills"
 DB_PATH = QUEST_DIR / "quest.db"
-HERMES_AGENT_DIR = Path(
-    os.environ.get("QUEST_HERMES_AGENT_DIR", str(HERMES_HOME / "hermes-agent"))
+
+# Agent runtime integration.
+#
+# Phase 1a carries over the Python-oriented spawn model inherited from
+# Hermes Quest. OpenClaw is a Node.js runtime installed at /usr/bin/openclaw
+# (AUR package), so the sys.path / hermes_cli.main plumbing below is a
+# placeholder: the `.exists()` guards will fail gracefully, and cycle/hub
+# features will report "runtime not found" until Phase 2 rewires them to
+# OpenClaw's actual invocation model.
+AGENT_RUNTIME_BIN = Path(
+    os.environ.get("QUEST_OPENCLAW_BIN", shutil.which("openclaw") or "/usr/bin/openclaw")
 ).expanduser()
-HERMES_AGENT_PYTHON = Path(
-    os.environ.get("QUEST_HERMES_PYTHON", str(HERMES_AGENT_DIR / "venv" / "bin" / "python"))
+AGENT_RUNTIME_HOME = Path(
+    os.environ.get("QUEST_OPENCLAW_HOME", str(OPENCLAW_HOME))
 ).expanduser()
-HERMES_AGENT_SITE_PACKAGES_GLOB = str(HERMES_AGENT_DIR / "venv" / "lib" / "python*" / "site-packages")
+# Kept for compatibility with the legacy spawn path; OpenClaw has no Python
+# site-packages, so this resolves to an empty glob and the loop is a no-op.
+AGENT_RUNTIME_SITE_PACKAGES_GLOB = os.environ.get("QUEST_OPENCLAW_SITE_PACKAGES_GLOB", "")
 TWITTER_CLI = os.environ.get("QUEST_TWITTER_CLI") or shutil.which("twitter") or ""
 QUEST_CYCLE_PROMPT = os.environ.get("QUEST_CYCLE_PROMPT", "Run quest evolution cycle")
 

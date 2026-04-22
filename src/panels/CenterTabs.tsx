@@ -19,7 +19,7 @@ import ShopBottomInfo from './ShopBottomInfo'
 // Extend window for SHOW TO NPC bridge
 declare global {
   interface Window {
-    __hermesShowToNpc?: (message: string) => void
+    __openclawShowToNpc?: (message: string) => void
   }
 }
 
@@ -56,14 +56,14 @@ export default function CenterTabs() {
 
   // Register global bridge for SHOW TO NPC
   useEffect(() => {
-    window.__hermesShowToNpc = (message: string) => {
+    window.__openclawShowToNpc = (message: string) => {
       setActiveTab('npc')
       setNpcPrefill(message)
       // Use currently active NPC, or default to guild_master
       setChatNpc(prev => prev || 'guild_master')
       setActiveNpc(null)
     }
-    return () => { window.__hermesShowToNpc = undefined }
+    return () => { window.__openclawShowToNpc = undefined }
   }, [setActiveTab])
 
   // Clear prefill after chat NPC changes
