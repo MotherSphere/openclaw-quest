@@ -63,6 +63,8 @@ Every LLM call goes through `openclaw agent` — the dashboard has no API keys o
 - **`server-ts/src/watcher.ts`** — polls `~/.openclaw/quest/` for new events, state changes, map updates and broadcasts them.
 - **`server-ts/src/npc-chat.ts`** — tavern NPC dialogue via `callAgent` with personas loaded from `server-ts/prompts/npcs/*.md`.
 - **`server-ts/src/routes/*.ts`** — one file per concern (quests, bag, feedback, sites, reflection, tavern, hub, rumors, misc).
+- **`server-ts/src/plugin-entry.ts`** — Node-compatible plugin entry loaded by OpenClaw. Registers the `openclaw quest` CLI command and a `openclaw-quest-backend` managed service that spawns `bun src/main.ts` as a child process (the backend itself stays on Bun; the plugin shell stays on Node so it can be loaded in-process by the gateway).
+- **`server-ts/openclaw.plugin.json`** — plugin manifest: id, configSchema, uiHints.
 
 ---
 
@@ -71,19 +73,44 @@ Every LLM call goes through `openclaw agent` — the dashboard has no API keys o
 Requires:
 - [**Bun**](https://bun.sh) 1.3+ (runtime for the backend; single binary, install with `curl -fsSL https://bun.sh/install | bash`).
 - **Node** for the Vite dev server (v22+).
-- A local **OpenClaw** install at `/usr/bin/openclaw` (AUR `openclaw` package or equivalent) with a working agent profile. The dashboard uses OpenClaw's credentials; it never asks for your own.
+- A local **OpenClaw** install (AUR `openclaw` package, `npm i -g openclaw`, or equivalent) with a working agent profile. The dashboard uses OpenClaw's credentials; it never asks for your own.
+
+### Option A — install as an OpenClaw plugin (recommended)
+
+```bash
+# Once the package is on npm:
+openclaw plugins install openclaw-quest --dangerously-force-unsafe-install
+
+# During development, link a local clone:
+git clone https://github.com/MotherSphere/openclaw-quest.git
+cd openclaw-quest/server-ts && bun install
+openclaw plugins install . --link --dangerously-force-unsafe-install
+```
+
+OpenClaw's installer scans plugin code for `child_process` and similar patterns and blocks them by default; Quest needs it to spawn `openclaw agent` and the `bun` backend, so pass `--dangerously-force-unsafe-install` once you've reviewed the code.
+
+With `autoStart: true` (the default), OpenClaw will launch `bun src/main.ts` as a managed service whenever the gateway boots. Then:
+
+```bash
+# In a second terminal (frontend dev server):
+cd openclaw-quest && npm install && npm run dev   # :5173
+
+# Anywhere:
+openclaw quest                                    # opens the dashboard
+```
+
+Plugin config lives in `~/.openclaw/openclaw.json` under `plugins.entries.openclaw-quest.config` — see `server-ts/openclaw.plugin.json` for the full schema (port, host, cycleEnabled, cycleAgentId, cycleThinking, cycleLlmTimeoutSec, autoStart, bunBin).
+
+### Option B — run the backend manually
 
 ```bash
 git clone https://github.com/MotherSphere/openclaw-quest.git
 cd openclaw-quest
 
-# Backend deps (bun)
 cd server-ts && bun install && cd ..
-
-# Frontend deps (node)
 npm install
 
-# Run (two terminals)
+# Two terminals:
 cd server-ts && QUEST_CYCLE_ENABLED=1 bun src/main.ts         # :8420
 npm run dev                                                    # :5173
 ```
@@ -121,10 +148,12 @@ All env vars optional. Defaults shown.
 - ✅ **Phase 7** — ClawHub wired via `openclaw skills`; rumors, tavern ambient, reflection letter ported; sites.json seeding so the World Map actually renders
 - ✅ **Phase 8** — dead-code cleanup, research notes drop into INVENTORY on quest completion, "SHOW TO NPC" no longer re-fires on tab switch
 - ✅ **Phase 9** — full backend rewrite from Python/FastAPI to TypeScript/Bun/Fastify. Same 43 endpoints, same WS broadcasts, same cycle/NPC behaviour — now running on OpenClaw's own runtime in preparation for shipping as a native plugin
+- ✅ **Phase 10** — packaged as a native OpenClaw plugin (`openclaw-quest`): `openclaw.plugin.json` manifest, `plugin-entry.ts` that registers the `openclaw quest` CLI command plus an auto-starting backend service, config exposed under `plugins.entries.openclaw-quest.config`
 
 ## Roadmap (next)
 
-- Register Openclaw-Quest as an OpenClaw plugin so `openclaw plugins install openclaw-quest` auto-adds the "Quêtes" tab to the control UI
+- Bundle a built frontend inside the plugin so `openclaw plugins install openclaw-quest` delivers a complete dashboard (no separate `npm run dev` step)
+- Upstream proposal for `api.registerTab(...)` so the dashboard can embed directly inside the OpenClaw control UI instead of opening a separate browser tab
 - Click-to-upload avatar for the character portrait and NPC sprites
 - Elapsed timer in the "thinking..." indicator
 - Varied item drops beyond research notes

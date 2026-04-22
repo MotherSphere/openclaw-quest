@@ -1,0 +1,91 @@
+{
+  "id": "openclaw-quest",
+  "name": "OpenClaw Quest",
+  "description": "RPG-style observability dashboard for OpenClaw agents — cycle runner, feedback loop, tavern NPCs, and a World Map that fills in from your agent's task history.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 8420,
+        "description": "TCP port the Quest backend listens on."
+      },
+      "host": {
+        "type": "string",
+        "minLength": 1,
+        "default": "127.0.0.1",
+        "description": "Bind host. Use 127.0.0.1 for loopback only or 0.0.0.0 to expose the dashboard on your LAN."
+      },
+      "cycleEnabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "When true, the CYCLE button spawns the REFLECT → PLAN → EXECUTE → REPORT loop via `openclaw agent`."
+      },
+      "cycleAgentId": {
+        "type": "string",
+        "minLength": 1,
+        "default": "main",
+        "description": "OpenClaw agent id invoked for cycles and NPC chat."
+      },
+      "cycleThinking": {
+        "type": "string",
+        "enum": ["off", "minimal", "low", "medium", "high"],
+        "default": "minimal"
+      },
+      "cycleLlmTimeoutSec": {
+        "type": "number",
+        "minimum": 10,
+        "default": 90
+      },
+      "autoStart": {
+        "type": "boolean",
+        "default": true,
+        "description": "Auto-start the Fastify backend as a managed service when OpenClaw boots. Disable to run it manually with `bun src/main.ts`."
+      },
+      "bunBin": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Override the Bun binary path. Defaults to $BUN_INSTALL/bin/bun, then `bun` on $PATH."
+      }
+    }
+  },
+  "uiHints": {
+    "port": {
+      "label": "Backend Port",
+      "help": "TCP port the Quest Fastify backend listens on."
+    },
+    "host": {
+      "label": "Bind Host",
+      "help": "127.0.0.1 for loopback only, 0.0.0.0 for LAN access."
+    },
+    "cycleEnabled": {
+      "label": "Enable CYCLE Runner",
+      "help": "Allow the CYCLE button to spawn the REFLECT → PLAN → EXECUTE → REPORT loop."
+    },
+    "cycleAgentId": {
+      "label": "Cycle Agent ID",
+      "help": "Which OpenClaw agent to invoke for cycles and NPC chat."
+    },
+    "cycleThinking": {
+      "label": "Cycle Thinking Level",
+      "advanced": true
+    },
+    "cycleLlmTimeoutSec": {
+      "label": "Cycle LLM Timeout (seconds)",
+      "advanced": true
+    },
+    "autoStart": {
+      "label": "Auto-start Backend",
+      "help": "Start the Fastify backend when OpenClaw boots. Disable to start it manually.",
+      "advanced": true
+    },
+    "bunBin": {
+      "label": "Bun Binary",
+      "help": "Override the Bun binary path. Leave blank to auto-detect.",
+      "advanced": true
+    }
+  }
+}
