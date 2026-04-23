@@ -110,7 +110,7 @@ export async function registerBagRoutes(app: FastifyInstance): Promise<void> {
         if (existsSync(full)) {
           try {
             const content = await readFile(full, "utf8");
-            return { content, file_path: full };
+            return { content, path: full };
           } catch {
             /* fall through */
           }
