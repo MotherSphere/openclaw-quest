@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 
 import { MAP_FILE, SITES_FILE } from "../config.ts";
+import { reclassifySkillsAfterSiteChange } from "../skill-classify.ts";
 import { manager } from "../ws-manager.ts";
 
 interface Site {
@@ -54,12 +55,52 @@ export async function registerSiteRoutes(app: FastifyInstance): Promise<void> {
       site.workflow_id = `${siteId}-workflow`;
       site.sprite = null;
       await writeSites(sites);
+
+      // Upsert the matching workflow into knowledge-map.json so reclassify
+      // has a placement target and the map panel renders the new site.
+      if (existsSync(MAP_FILE)) {
+        try {
+          const raw = await readFile(MAP_FILE, "utf8");
+          const map = JSON.parse(raw) as {
+            workflows?: Array<Record<string, unknown>>;
+            [key: string]: unknown;
+          };
+          const workflows = map.workflows ?? [];
+          const wfId = site.workflow_id;
+          if (wfId && !workflows.some((w) => w["id"] === wfId)) {
+            const now = new Date().toISOString();
+            workflows.push({
+              id: wfId,
+              name,
+              description: `Skills related to ${name}`,
+              category: site.domain ?? "general",
+              position: { x: 0.5, y: 0.5 },
+              discovered_at: now,
+              last_active: now,
+              interaction_count: 0,
+              correction_count: 0,
+              mastery: 0,
+              skills_involved: [],
+              sub_nodes: [],
+            });
+            map.workflows = workflows;
+            await writeFile(MAP_FILE, JSON.stringify(map, null, 2));
+            manager.broadcast({ type: "map", data: map });
+          }
+        } catch {
+          /* ignore — reclassify will still run */
+        }
+      }
+
       manager.broadcast({ type: "sites", data: sites });
+      reclassifySkillsAfterSiteChange().catch(() => {
+        /* logged inside */
+      });
       return { ok: true, site };
     },
   );
 
-  app.post<{ Body: { site_id?: string; name?: string } }>(
+  app.post<{ Body: { site_id?: string; name?: string; domain?: string } }>(
     "/api/sites/rename",
     async (request, reply) => {
       const body = request.body ?? {};
@@ -72,8 +113,42 @@ export async function registerSiteRoutes(app: FastifyInstance): Promise<void> {
       const site = sites.find((s) => s.id === siteId);
       if (!site) return reply.code(404).send({ error: "site_not_found" });
       site.name = name;
+      if (typeof body.domain === "string" && body.domain.trim()) {
+        site.domain = body.domain.slice(0, 60);
+      }
       await writeSites(sites);
+
+      // Update the workflow's display name to match.
+      const wfId = site.workflow_id;
+      if (wfId && existsSync(MAP_FILE)) {
+        try {
+          const raw = await readFile(MAP_FILE, "utf8");
+          const map = JSON.parse(raw) as {
+            workflows?: Array<Record<string, unknown>>;
+            [key: string]: unknown;
+          };
+          let changed = false;
+          for (const wf of map.workflows ?? []) {
+            if (wf["id"] === wfId) {
+              wf["name"] = name;
+              wf["category"] = site.domain ?? "general";
+              changed = true;
+              break;
+            }
+          }
+          if (changed) {
+            await writeFile(MAP_FILE, JSON.stringify(map, null, 2));
+            manager.broadcast({ type: "map", data: map });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
       manager.broadcast({ type: "sites", data: sites });
+      reclassifySkillsAfterSiteChange().catch(() => {
+        /* logged inside */
+      });
       return { ok: true, site };
     },
   );
@@ -110,6 +185,9 @@ export async function registerSiteRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       manager.broadcast({ type: "sites", data: sites });
+      reclassifySkillsAfterSiteChange().catch(() => {
+        /* logged inside */
+      });
       return { ok: true };
     },
   );

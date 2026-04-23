@@ -28,7 +28,21 @@ import {
   upsertState,
   type EventInput,
 } from "./models.ts";
+import { reclassifySkillsAfterSiteChange } from "./skill-classify.ts";
 import { manager } from "./ws-manager.ts";
+
+const SKILL_CLASSIFY_DEBOUNCE_MS = 30_000;
+let skillClassifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueSkillReclassify(): void {
+  if (skillClassifyTimer) clearTimeout(skillClassifyTimer);
+  skillClassifyTimer = setTimeout(() => {
+    skillClassifyTimer = null;
+    reclassifySkillsAfterSiteChange().catch((err) => {
+      console.warn("[watcher] skill reclassify failed:", (err as Error).message);
+    });
+  }, SKILL_CLASSIFY_DEBOUNCE_MS);
+}
 
 const logger = {
   info: (msg: string, ...args: unknown[]) => console.log(`[watcher] ${msg}`, ...args),
@@ -240,6 +254,7 @@ export class QuestWatcher {
         updated_at: ts,
         source: "training",
       });
+      queueSkillReclassify();
       return;
     }
 
@@ -255,6 +270,7 @@ export class QuestWatcher {
         updated_at: ts,
         source: (data["source"] as string) ?? "hub",
       });
+      queueSkillReclassify();
       return;
     }
 
