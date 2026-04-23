@@ -1,6 +1,6 @@
 {
   "name": "openclaw-quest",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "RPG-style observability dashboard for OpenClaw agents — packaged as a native OpenClaw plugin.",
   "type": "module",
   "license": "MIT",
