@@ -29,6 +29,7 @@ import {
 } from "./config.ts";
 import { callAgent } from "./openclaw-agent.ts";
 import { readTaskRuns } from "./openclaw-bridge.ts";
+import { reclassifySkillsAfterSiteChange } from "./skill-classify.ts";
 
 type Any = Record<string, unknown>;
 
@@ -133,8 +134,16 @@ class QuestCycleRunner {
   }
 
   private async reflectAndPlan(): Promise<CyclePlan> {
+    const wasEmpty = !(((this.mapData?.["workflows"] as unknown[]) ?? []).length > 0);
     await this.seedWorkflowsIfEmpty();
     this.ensureSitesFromWorkflows();
+    if (wasEmpty && ((this.mapData?.["workflows"] as unknown[]) ?? []).length > 0) {
+      // Fire-and-forget: classify any pre-existing skills into the new workflows
+      // so the SubRegionGraph has something to render on first load.
+      reclassifySkillsAfterSiteChange().catch(() => {
+        /* logged inside */
+      });
+    }
 
     const workflows = Array.isArray((this.mapData as Any)["workflows"])
       ? ((this.mapData as Any)["workflows"] as Any[])
