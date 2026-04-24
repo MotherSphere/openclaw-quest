@@ -192,7 +192,7 @@ export async function registerFeedbackRoutes(app: FastifyInstance): Promise<void
 
     if (eventId) seenEventIds.add(eventId);
 
-    if ((state["hp"] as number | undefined) === 0) {
+    if (((state["hp"] as number | undefined) ?? 0) <= 0) {
       state["reflection_letter_pending"] = true;
     }
     await writeFile(STATE_FILE, JSON.stringify(state, null, 2));

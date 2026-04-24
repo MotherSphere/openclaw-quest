@@ -51,7 +51,22 @@ app.get<{ Querystring: { limit?: string; offset?: string } }>(
   async (request) => {
     const limit = Number.parseInt(request.query.limit ?? "50", 10);
     const offset = Number.parseInt(request.query.offset ?? "0", 10);
-    return getEvents(Number.isFinite(limit) ? limit : 50, Number.isFinite(offset) ? offset : 0);
+    const rows = getEvents(
+      Number.isFinite(limit) ? limit : 50,
+      Number.isFinite(offset) ? offset : 0,
+    );
+    // Dedup by (ts, type, first 60 chars of data) — watcher and route
+    // writers can race on the same event-ms and emit twins. Matches
+    // hermes-quest main.py:546-556 so the Chronicle feed stops flickering.
+    const seen = new Set<string>();
+    const unique: typeof rows = [];
+    for (const e of rows) {
+      const key = `${e.ts}-${e.type}-${JSON.stringify(e.data ?? {}).slice(0, 60)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(e);
+    }
+    return unique;
   },
 );
 

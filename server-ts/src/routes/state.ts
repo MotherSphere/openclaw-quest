@@ -27,7 +27,7 @@ export async function registerStateRoutes(app: FastifyInstance): Promise<void> {
 
       const state = (getState() ?? {}) as Record<string, unknown>;
       Object.assign(state, updates);
-      if ((state["hp"] as number | undefined) === 0) {
+      if (((state["hp"] as number | undefined) ?? 0) <= 0) {
         state["reflection_letter_pending"] = true;
       }
       await writeFile(STATE_FILE, JSON.stringify(state, null, 2));

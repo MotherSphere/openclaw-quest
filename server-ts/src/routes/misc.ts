@@ -133,12 +133,17 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
       if (!existsSync(STATE_FILE)) return reply.code(500).send({ error: "no state" });
 
       const state = JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
+      const current = (state[potion.stat] as number) ?? 0;
+      const max = (state[potion.max_stat] as number) ?? 100;
+      // Reject rather than silently clamp — otherwise gold is spent with
+      // zero effect (upstream parity: hermes-quest main.py:2360-2365).
+      if (current >= max) {
+        return reply.code(400).send({ error: "already_full" });
+      }
       if (((state["gold"] as number) ?? 0) < potion.cost) {
         return reply.code(400).send({ error: "not_enough_gold" });
       }
       state["gold"] = ((state["gold"] as number) ?? 0) - potion.cost;
-      const current = (state[potion.stat] as number) ?? 0;
-      const max = (state[potion.max_stat] as number) ?? 100;
       state[potion.stat] = Math.min(current + potion.amount, max);
       await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
       upsertState(state);
