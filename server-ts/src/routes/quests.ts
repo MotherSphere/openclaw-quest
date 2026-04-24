@@ -9,9 +9,9 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 
-import { GAME_BALANCE, QUESTS_V2_FILE } from "../config.ts";
+import { EVENTS_FILE, GAME_BALANCE, QUESTS_V2_FILE, STATE_FILE } from "../config.ts";
 import { manager } from "../ws-manager.ts";
-import { getQuests } from "../models.ts";
+import { getQuests, insertEvent, upsertState } from "../models.ts";
 
 interface Quest {
   id: string;
@@ -191,11 +191,50 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
       const questId = request.body?.quest_id;
       if (!questId) return reply.code(400).send({ error: "quest_id required" });
       const quests = await readQuestsJson();
-      const q = quests.find((x) => x.id === questId);
-      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      const q = quests.find(
+        (x) =>
+          x.id === questId &&
+          (x.status === "active" || x.status === "in_progress" || x.status === "pending"),
+      );
+      if (!q) return reply.code(404).send({ error: "quest_not_found_or_not_active" });
       q.status = "failed";
       q.completed_at = new Date().toISOString();
       await writeQuestsJson(quests);
+
+      // Apply HP/MP penalties (port of hermes-quest server/main.py quest_fail).
+      // If HP hits zero, queue the reflection letter so the UI surfaces it.
+      const hpPenalty = GAME_BALANCE.fail_hp_penalty;
+      const mpPenalty = GAME_BALANCE.fail_mp_penalty;
+      let state: Record<string, unknown> = {};
+      if (existsSync(STATE_FILE)) {
+        try {
+          state = JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
+        } catch {
+          state = {};
+        }
+      }
+      state["hp"] = Math.max(0, Number(state["hp"] ?? 100) - hpPenalty);
+      state["mp"] = Math.max(0, Number(state["mp"] ?? 100) - mpPenalty);
+      if ((state["hp"] as number) <= 0) state["reflection_letter_pending"] = true;
+      await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+      upsertState(state);
+
+      const event = {
+        ts: new Date().toISOString(),
+        type: "quest_fail",
+        region: null,
+        data: {
+          quest_id: questId,
+          title: q.title ?? "",
+          hp_penalty: hpPenalty,
+          mp_penalty: mpPenalty,
+        },
+      };
+      await writeFile(EVENTS_FILE, JSON.stringify(event) + "\n", { flag: "a" });
+      insertEvent(event);
+
+      manager.broadcast({ type: "state", data: state });
+      manager.broadcast({ type: "event", data: event });
       manager.broadcast({
         type: "quest",
         data: {
@@ -204,7 +243,12 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
           ),
         },
       });
-      return { ok: true, quest: q };
+      return {
+        ok: true,
+        quest_id: questId,
+        hp_penalty: hpPenalty,
+        mp_penalty: mpPenalty,
+      };
     },
   );
 
