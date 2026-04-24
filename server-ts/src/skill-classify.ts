@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MAP_FILE, SITES_FILE } from "./config.ts";
+import { inferConnections } from "./connections-infer.ts";
 import { callAgent } from "./openclaw-agent.ts";
 import { getSkills, type SkillRow } from "./models.ts";
 import { manager } from "./ws-manager.ts";
@@ -324,6 +325,12 @@ async function runOnce(): Promise<void> {
   }
 
   map.workflows = workflows;
+  // Re-derive inter-workflow connections from the freshly populated
+  // skills_involved. Without this the SubRegionGraph panel renders
+  // isolated nodes (issue nemoaigc/hermes-quest#1).
+  const connections = inferConnections(workflows);
+  map.connections = connections;
+  logger.info(`inferred ${connections.length} inter-workflow connection(s)`);
   await writeFile(MAP_FILE, JSON.stringify(map, null, 2), "utf8");
 
   logger.info(`reclassified ${skills.length} skills into ${definedSites.length} sites`);
