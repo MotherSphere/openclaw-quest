@@ -29,6 +29,7 @@ import {
 } from "./config.ts";
 import { callAgent } from "./openclaw-agent.ts";
 import { readTaskRuns } from "./openclaw-bridge.ts";
+import { applyLevelUps } from "./rewards.ts";
 import { reclassifySkillsAfterSiteChange } from "./skill-classify.ts";
 
 type Any = Record<string, unknown>;
@@ -413,16 +414,10 @@ class QuestCycleRunner {
       Number(this.state["mp_max"] ?? GAME_BALANCE.mp_max),
     );
 
-    let leveledUp = false;
-    while (Number(this.state["xp"]) >= Number(this.state["xp_to_next"])) {
-      this.state["xp"] = Number(this.state["xp"]) - Number(this.state["xp_to_next"]);
-      this.state["level"] = Number(this.state["level"]) + 1;
-      this.state["xp_to_next"] = Number(this.state["level"]) * GAME_BALANCE.xp_per_level;
-      this.state["hp_max"] =
-        GAME_BALANCE.hp_base + Number(this.state["level"]) * GAME_BALANCE.hp_per_level;
-      this.state["hp"] = this.state["hp_max"];
-      leveledUp = true;
-    }
+    // Level-up loop shared with the HTTP path (`/api/quest/complete`).
+    // The auto-cycle doesn't apply the Python +MP-on-level-up bonus —
+    // that's a manual-path-only behaviour (upstream Python parity).
+    const { leveledUp } = applyLevelUps(this.state);
 
     writeJson(STATE_FILE, this.state);
     if (leveledUp) {
