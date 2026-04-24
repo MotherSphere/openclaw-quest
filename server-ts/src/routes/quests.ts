@@ -10,6 +10,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 
 import { EVENTS_FILE, GAME_BALANCE, QUESTS_V2_FILE, STATE_FILE } from "../config.ts";
+import { applyCompletionRewards, applyFailPenalty } from "../rewards.ts";
 import { manager } from "../ws-manager.ts";
 import { getQuests, insertEvent, upsertState } from "../models.ts";
 
@@ -39,6 +40,15 @@ async function readQuestsJson(): Promise<Quest[]> {
 
 async function writeQuestsJson(quests: Quest[]): Promise<void> {
   await writeFile(QUESTS_V2_FILE, JSON.stringify(quests, null, 2));
+}
+
+async function readStateFile(): Promise<Record<string, unknown>> {
+  if (!existsSync(STATE_FILE)) return {};
+  try {
+    return JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 function rewardsFor(rank: string): { xp: number; gold: number } {
@@ -201,21 +211,11 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
       q.completed_at = new Date().toISOString();
       await writeQuestsJson(quests);
 
-      // Apply HP/MP penalties (port of hermes-quest server/main.py quest_fail).
-      // If HP hits zero, queue the reflection letter so the UI surfaces it.
       const hpPenalty = GAME_BALANCE.fail_hp_penalty;
       const mpPenalty = GAME_BALANCE.fail_mp_penalty;
-      let state: Record<string, unknown> = {};
-      if (existsSync(STATE_FILE)) {
-        try {
-          state = JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
-        } catch {
-          state = {};
-        }
-      }
-      state["hp"] = Math.max(0, Number(state["hp"] ?? 100) - hpPenalty);
-      state["mp"] = Math.max(0, Number(state["mp"] ?? 100) - mpPenalty);
-      if ((state["hp"] as number) <= 0) state["reflection_letter_pending"] = true;
+      const state = await readStateFile();
+      const { hpDepleted } = applyFailPenalty(state, { hp: hpPenalty, mp: mpPenalty });
+      if (hpDepleted) state["reflection_letter_pending"] = true;
       await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
       upsertState(state);
 
@@ -268,41 +268,14 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
       q.completed_at = new Date().toISOString();
       await writeQuestsJson(quests);
 
-      // Award XP + gold, handle level-ups (port of hermes-quest main.py:1435-1466).
-      // The auto quest-cycle path has its own inline copy of this logic in
-      // quest-cycle.ts:completeTargetQuest; keep both in sync.
       const xpReward = Number(q.reward_xp ?? GAME_BALANCE.default_reward_xp);
       const goldReward = Number(q.reward_gold ?? GAME_BALANCE.default_reward_gold);
-      let state: Record<string, unknown> = {};
-      if (existsSync(STATE_FILE)) {
-        try {
-          state = JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
-        } catch {
-          state = {};
-        }
-      }
-      state["xp"] = Number(state["xp"] ?? 0) + xpReward;
-      state["gold"] = Number(state["gold"] ?? 0) + goldReward;
-      let leveledUp = false;
-      while (
-        Number(state["xp"] ?? 0) >=
-        Number(state["xp_to_next"] ?? Number(state["level"] ?? 1) * GAME_BALANCE.xp_per_level)
-      ) {
-        state["xp"] = Number(state["xp"]) - Number(state["xp_to_next"]);
-        state["level"] = Number(state["level"] ?? 1) + 1;
-        state["xp_to_next"] = Number(state["level"]) * GAME_BALANCE.xp_per_level;
-        state["hp_max"] =
-          GAME_BALANCE.hp_base + Number(state["level"]) * GAME_BALANCE.hp_per_level;
-        state["hp"] = state["hp_max"];
-        leveledUp = true;
-      }
-      if (leveledUp) {
-        const mpMax = Number(state["mp_max"] ?? GAME_BALANCE.mp_max);
-        state["mp"] = Math.min(
-          Number(state["mp"] ?? 0) + GAME_BALANCE.levelup_mp_restore,
-          mpMax,
-        );
-      }
+      const state = await readStateFile();
+      const { leveledUp } = applyCompletionRewards(state, {
+        xp: xpReward,
+        gold: goldReward,
+        mpBonusOnLevelUp: GAME_BALANCE.levelup_mp_restore,
+      });
       if ((state["hp"] as number) <= 0) state["reflection_letter_pending"] = true;
       await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
       upsertState(state);
