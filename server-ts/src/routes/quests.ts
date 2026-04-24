@@ -258,11 +258,72 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
       const questId = request.body?.quest_id;
       if (!questId) return reply.code(400).send({ error: "quest_id required" });
       const quests = await readQuestsJson();
-      const q = quests.find((x) => x.id === questId);
-      if (!q) return reply.code(404).send({ error: "quest_not_found" });
+      const q = quests.find(
+        (x) =>
+          x.id === questId &&
+          (x.status === "active" || x.status === "in_progress" || x.status === "pending"),
+      );
+      if (!q) return reply.code(404).send({ error: "quest_not_found_or_already_completed" });
       q.status = "completed";
       q.completed_at = new Date().toISOString();
       await writeQuestsJson(quests);
+
+      // Award XP + gold, handle level-ups (port of hermes-quest main.py:1435-1466).
+      // The auto quest-cycle path has its own inline copy of this logic in
+      // quest-cycle.ts:completeTargetQuest; keep both in sync.
+      const xpReward = Number(q.reward_xp ?? GAME_BALANCE.default_reward_xp);
+      const goldReward = Number(q.reward_gold ?? GAME_BALANCE.default_reward_gold);
+      let state: Record<string, unknown> = {};
+      if (existsSync(STATE_FILE)) {
+        try {
+          state = JSON.parse(await readFile(STATE_FILE, "utf8")) as Record<string, unknown>;
+        } catch {
+          state = {};
+        }
+      }
+      state["xp"] = Number(state["xp"] ?? 0) + xpReward;
+      state["gold"] = Number(state["gold"] ?? 0) + goldReward;
+      let leveledUp = false;
+      while (
+        Number(state["xp"] ?? 0) >=
+        Number(state["xp_to_next"] ?? Number(state["level"] ?? 1) * GAME_BALANCE.xp_per_level)
+      ) {
+        state["xp"] = Number(state["xp"]) - Number(state["xp_to_next"]);
+        state["level"] = Number(state["level"] ?? 1) + 1;
+        state["xp_to_next"] = Number(state["level"]) * GAME_BALANCE.xp_per_level;
+        state["hp_max"] =
+          GAME_BALANCE.hp_base + Number(state["level"]) * GAME_BALANCE.hp_per_level;
+        state["hp"] = state["hp_max"];
+        leveledUp = true;
+      }
+      if (leveledUp) {
+        const mpMax = Number(state["mp_max"] ?? GAME_BALANCE.mp_max);
+        state["mp"] = Math.min(
+          Number(state["mp"] ?? 0) + GAME_BALANCE.levelup_mp_restore,
+          mpMax,
+        );
+      }
+      if ((state["hp"] as number) <= 0) state["reflection_letter_pending"] = true;
+      await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+      upsertState(state);
+
+      const event = {
+        ts: new Date().toISOString(),
+        type: "quest_complete",
+        region: null,
+        data: {
+          quest_id: questId,
+          title: q.title ?? "",
+          reward_xp: xpReward,
+          reward_gold: goldReward,
+          leveled_up: leveledUp,
+        },
+      };
+      await writeFile(EVENTS_FILE, JSON.stringify(event) + "\n", { flag: "a" });
+      insertEvent(event);
+
+      manager.broadcast({ type: "state", data: state });
+      manager.broadcast({ type: "event", data: event });
       manager.broadcast({
         type: "quest",
         data: {
@@ -271,7 +332,13 @@ export async function registerQuestRoutes(app: FastifyInstance): Promise<void> {
           ),
         },
       });
-      return { ok: true, quest: q };
+      return {
+        ok: true,
+        quest_id: questId,
+        reward_xp: xpReward,
+        reward_gold: goldReward,
+        leveled_up: leveledUp,
+      };
     },
   );
 
