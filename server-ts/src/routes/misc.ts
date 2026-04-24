@@ -118,11 +118,16 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
     return { status: "started", mode: "native-ts" };
   });
 
-  // /api/potion/use — spend gold, heal HP or restore MP
-  app.post<{ Body: { potion_id?: string } }>(
+  // /api/potion/use — spend gold, heal HP or restore MP.
+  // The frontend (src/api.ts `drinkPotion`) and the upstream Python
+  // endpoint (hermes-quest server/main.py) both use `type` as the body
+  // key; the Phase 9 TS port briefly renamed it to `potion_id`, which
+  // silently broke the shop's HP/MP buttons with an "invalid potion"
+  // 400 → "Potion fizzled..." UI message.
+  app.post<{ Body: { type?: string } }>(
     "/api/potion/use",
     async (request, reply) => {
-      const id = request.body?.potion_id ?? "";
+      const id = request.body?.type ?? "";
       const potion = POTIONS[id];
       if (!potion) return reply.code(400).send({ error: "invalid potion" });
       if (!existsSync(STATE_FILE)) return reply.code(500).send({ error: "no state" });
