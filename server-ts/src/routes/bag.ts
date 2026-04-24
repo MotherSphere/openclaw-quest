@@ -1,5 +1,6 @@
 /** /api/bag/* — inventory endpoints. Reads bag.json + auto-includes any
- * .md file under ~/.openclaw/quest/completions/ as a research_note. */
+ * .md file under ~/.openclaw/quest/completions/, with type + rarity
+ * derived from the completion content via bag-classifier. */
 
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -7,6 +8,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 
 import { BAG_FILE, COMPLETIONS_DIR } from "../config.ts";
+import { classifyCompletion } from "../bag-classifier.ts";
 import { manager } from "../ws-manager.ts";
 
 interface BagItem {
@@ -56,16 +58,17 @@ export async function registerBagRoutes(app: FastifyInstance): Promise<void> {
         mdFiles.sort((a, b) => b.mtime - a.mtime);
         for (const f of mdFiles) {
           const stem = f.name.replace(/\.md$/i, "");
+          const { type, rarity, icon } = classifyCompletion({ raw: f.raw, stem });
           items.push({
             id: `completion-${stem}`,
-            type: "research_note",
+            type,
             name: completionDisplayName(f.raw, stem),
             description: completionPreview(f.raw),
             source_quest: null,
             created_at: new Date(f.mtime).toISOString(),
             file_path: f.path,
-            icon: "scroll",
-            rarity: "common",
+            icon,
+            rarity,
           });
         }
       } catch {
