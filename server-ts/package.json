@@ -18,6 +18,7 @@
   ],
   "files": [
     "src",
+    "dist",
     "prompts",
     "dist-frontend",
     "openclaw.plugin.json",
@@ -27,11 +28,14 @@
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.plugin.json",
+    "build:watch": "tsc -p tsconfig.plugin.json --watch",
+    "prepack": "tsc -p tsconfig.plugin.json",
     "test": "bun test"
   },
   "openclaw": {
     "extensions": [
-      "./src/plugin-entry.ts"
+      "./dist/plugin-entry.js"
     ],
     "compat": {
       "pluginApi": ">=2026.4.20",
